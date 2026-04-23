@@ -1,0 +1,2 @@
+from modules.mm_direct_gen import generate_from_image
+from modules.clean_yue_runtime import generate_song_auto
