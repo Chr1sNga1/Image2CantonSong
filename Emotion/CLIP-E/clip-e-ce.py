@@ -12,7 +12,7 @@ import tensorflow as tf
 from transformers import AutoProcessor, TFCLIPModel
 from pathlib import Path
 
-repo_root = Path(__file__).resolve().parents[1]
+repo_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(repo_root))
 from paths import PROJECT_ROOT
 
@@ -160,17 +160,55 @@ class CLIPECrossEntropy:
         with Image.open(BytesIO(image_bytes)) as image:
             return self.predict_top_n_from_pil(image, n=n, model_type=model_type)
 
-    def predict_top_n(self, image, n=5, model_type='25cat'):
+    def predict_from_pil(self, image: Image.Image, model_type='25cat'):
         """
-        Predict top n sentiment labels for an image.
+        Predict sentiment scores for a PIL Image using the full label set.
+        """
+        return self.predict(image, model_type=model_type)
+
+    def predict_from_path(self, image_path: str, model_type='25cat'):
+        """
+        Predict sentiment scores from an image file path using the full label set.
+        """
+        with Image.open(image_path) as image:
+            return self.predict_from_pil(image, model_type=model_type)
+
+    def predict_from_bytes(self, image_bytes: bytes, model_type='25cat'):
+        """
+        Predict sentiment scores from raw image bytes using the full label set.
+        """
+        with Image.open(BytesIO(image_bytes)) as image:
+            return self.predict_from_pil(image, model_type=model_type)
+
+    def predict_top_n(self, image, n=None, model_type='25cat'):
+        """
+        Predict the top n sentiment labels for an image.
         
         Args:
             image: PIL Image or path to image file
-            n: Number of top predictions to return
+            n: Number of top predictions to return, or None to return the full list
             model_type: Type of model to use ('25cat', '6cat', or 'binary')
         
         Returns:
-            List of tuples (label, confidence_score) sorted by confidence
+            List of dictionaries with keys `label` and `score`, sorted by score descending.
+        """
+        results = self.predict(image, model_type=model_type)
+        if n is None:
+            return results
+        if n <= 0:
+            return []
+        return results[:n]
+    
+    def predict(self, image, model_type='25cat'):
+        """
+        Predict sentiment scores for the full label set of a single model.
+        
+        Args:
+            image: PIL Image or path to image file
+            model_type: Type of model to use ('25cat', '6cat', or 'binary')
+        
+        Returns:
+            List of dictionaries with keys `label` and `score` for every class in the model.
         """
         if model_type == '25cat':
             if self.model_25cat is None:
@@ -189,45 +227,16 @@ class CLIPECrossEntropy:
             labels = self.LABELS_BINARY
         else:
             raise ValueError(f"Unknown model_type: {model_type}")
-        
-        # Extract features
+
         image_features = self._extract_image_features(image)
-        
-        # Get predictions
         preds = model.predict(image_features, verbose=0)
         preds = np.squeeze(preds)
-        
-        # Handle binary case
+
         if model_type == 'binary':
             preds = np.array([1 - preds, preds])
-        
-        # Get top n predictions
-        top_n_indices = np.argsort(preds)[::-1][:n]
-        results = [(labels[idx], float(preds[idx])) for idx in top_n_indices]
-        
-        return results
-    
-    def predict_all(self, image):
-        """
-        Predict sentiment using all three models.
-        
-        Args:
-            image: PIL Image or path to image file
-        
-        Returns:
-            Dictionary with predictions from all models
-        """
-        results = {}
-        
-        if self.model_binary:
-            results['binary'] = self.predict_top_n(image, n=2, model_type='binary')
-        
-        if self.model_6cat:
-            results['6_categories'] = self.predict_top_n(image, n=6, model_type='6cat')
-        
-        if self.model_25cat:
-            results['25_categories'] = self.predict_top_n(image, n=5, model_type='25cat')
-        
+
+        results = [{"label": labels[idx], "score": float(preds[idx])} for idx in range(len(labels))]
+        results.sort(key=lambda item: item["score"], reverse=True)
         return results
 
 
@@ -249,8 +258,8 @@ def main():
     parser.add_argument(
         "--top-n",
         type=int,
-        default=5,
-        help="Number of top labels to print.",
+        default=None,
+        help="Number of top labels to print. Omit to print the full sorted label list.",
     )
     parser.add_argument(
         "--mood-only",
@@ -276,19 +285,22 @@ def main():
             image_bytes = f.read()
 
     model = CLIPECrossEntropy(
-        model_path_25cat=PROJECT_ROOT / "CLIP-E" / 'clip-e_25cat.hdf5',
-        model_path_6cat=PROJECT_ROOT / "CLIP-E" / 'clip-e_6cat.hdf5',
-        model_path_binary=PROJECT_ROOT / "CLIP-E" / 'clip-e_binary.hdf5',
+        model_path_25cat=PROJECT_ROOT / "Emotion" / "CLIP-E" / 'clip-e_25cat.hdf5',
+        model_path_6cat=PROJECT_ROOT / "Emotion" / "CLIP-E" / 'clip-e_6cat.hdf5',
+        model_path_binary=PROJECT_ROOT / "Emotion" / "CLIP-E" / 'clip-e_binary.hdf5',
         verbose=not args.mood_only,
     )
-    results = model.predict_top_n_from_bytes(
-        image_bytes, n=args.top_n, model_type=args.model_type
-    )
-    if args.mood_only:
-        print(", ".join(label for label, _ in results))
+    if args.top_n is None:
+        results = model.predict_from_bytes(image_bytes, model_type=args.model_type)
     else:
-        for label, score in results:
-            print(f"{label}: {score:.4f}")
+        results = model.predict_top_n_from_bytes(
+            image_bytes, n=args.top_n, model_type=args.model_type
+        )
+    if args.mood_only:
+        print(", ".join(item["label"] for item in results))
+    else:
+        for item in results:
+            print(f"{item['label']}: {item['score']:.4f}")
 
 
 if __name__ == "__main__":
