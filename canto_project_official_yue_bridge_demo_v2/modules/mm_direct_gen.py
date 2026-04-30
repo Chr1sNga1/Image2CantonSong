@@ -82,7 +82,8 @@ def generate_clip_e_mood(image: Image.Image) -> str:
     script_path = PROJECT_ROOT / "CLIP-E" / "clip-e-ce.py"
     cmd = (
         "conda activate clip-e && "
-        f" python {script_path} --stdin-bytes --model-type 25cat --top-n 2 --mood-only"
+        f" python {script_path} --stdin-bytes --model-type 25cat --top-n 2 --mood-only && "
+        "conda deactivate"
     )
     proc = subprocess.run(
         ["bash", "-lic", cmd],
