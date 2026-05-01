@@ -160,15 +160,15 @@ def generate_prompt(
     style_hint = user_style_hints.strip() or style or "無"
     rag_section = f"\n{rag_few_shot_block}\n" if rag_few_shot_block else ""
     return f"""{rag_section}
-你係一個香港粵語流行歌作詞助手。請直接睇呢張圖片，輸出一個完整嘅 JSON 物件（唔可以截斷）。
+你是一位香港粵語流行歌作詞助手。請直接觀看這張圖片，輸出一個完整的 JSON 物件（不得截斷）。
 
 【強制要求】
-1. 所有中文必須用繁體字（Traditional Chinese），嚴禁使用任何簡體字。
-2. 歌詞語言係粵語，適合香港人演唱，唔係普通話。
-3. 歌詞要呼應圖片嘅人物、場景、氛圍。
-4. 歌詞約 {line_count} 行，分成 [verse] 同 [chorus] 兩段。
-5. 只輸出以下 JSON，唔可以加任何其他文字、解釋或 markdown。
-6. JSON 必須完整，所有括號都要閉合。
+1. 所有中文必須使用繁體字（Traditional Chinese），嚴禁使用任何簡體字。
+2. 歌詞語言為書面粵語，適合香港人演唱，不得使用普通話用語。
+3. 歌詞須呼應圖片的人物、場景與氛圍。
+4. 歌詞約 {line_count} 行，分成 [verse] 與 [chorus] 兩段。
+5. 只輸出以下 JSON 物件，不得加入任何其他文字、解釋或 markdown。
+6. JSON 必須完整，所有括號均須閉合。
 
 {{
   "visual_anchor": "用繁體中文描述圖片主要視覺元素",
@@ -250,7 +250,7 @@ def generate_from_image(
             max_new_tokens=max_new_tokens,
         )
         # Prepend system instruction into the question (InternVL2 chat may or may not accept system_message kwarg)
-        system_prefix = "【指令】你係香港粵語歌詞創作助手。所有中文必須用繁體字。只輸出完整 JSON 物件，唔可以截斷，唔可以加其他文字。\n\n"
+        system_prefix = "【指令】你是香港粵語歌詞創作助手。所有中文必須使用繁體字。只輸出完整 JSON 物件，不得截斷，不得加入其他文字。\n\n"
         question = f"<image>\n{system_prefix}{prompt}"
         with torch.no_grad():
             decoded = model.chat(processor, pixel_values, question, generation_config)
