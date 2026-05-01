@@ -183,8 +183,16 @@ def generate_from_image(
     max_new_tokens: int = 448,
     user_style_hints: str = "",
     run_on_cpu: bool = False,
+    hf_token: str | None = None,
 ) -> LyricsPromptBundle:
     torch = _torch()
+    # Log in to HF Hub if token provided (needed for private adapter repos)
+    if hf_token:
+        try:
+            from huggingface_hub import login as _hf_login
+            _hf_login(token=hf_token, add_to_git_credential=False)
+        except Exception:
+            pass
     image = Image.open(BytesIO(image_bytes)).convert("RGB")
     image.thumbnail((1024, 1024))
     prompt = generate_prompt(image, style, line_count=line_count, user_style_hints=user_style_hints)

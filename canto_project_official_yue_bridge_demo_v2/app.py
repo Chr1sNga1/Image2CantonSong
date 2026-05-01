@@ -100,6 +100,13 @@ with st.sidebar:
         hard_reset()
         st.rerun()
 
+    st.header("HuggingFace")
+    hf_token = st.text_input("HF Token", type="password", placeholder="hf_...")
+    if hf_token:
+        st.caption("✅ Token provided — used to load private HF models/adapters.")
+    else:
+        st.caption("⚠️ Leave blank if all models are public.")
+
     st.header("Step 2 — Multimodal LLM")
     MM_MODEL_OPTIONS = [
         "Qwen/Qwen2.5-VL-3B-Instruct",
@@ -175,6 +182,7 @@ if st.session_state["step_1_done"]:
                 max_new_tokens=int(mm_max_new_tokens),
                 user_style_hints=user_style_hints,
                 run_on_cpu=bool(mm_run_on_cpu),
+                hf_token=hf_token or None,
             )
             st.session_state["step_2_done"] = True
             st.session_state["step_3_done"] = False
