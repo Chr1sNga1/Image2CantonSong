@@ -91,6 +91,16 @@ def _load_model(model_id: str, run_on_cpu: bool):
 
     return _PROCESSOR_CACHE[model_id], _MODEL_CACHE[cache_key], device
 
+def _repair_json(text: str) -> str:
+    """Apply heuristic fixes for common model JSON-formatting errors."""
+    # Remove spurious lone `},` lines that appear between key-value pairs.
+    # Pattern: a closing quote of a value, then a line with just `},`, then the next key.
+    # e.g.  "last lyric line"\n  },\n  "genre_prompt"  →  "last lyric line",\n  "genre_prompt"
+    text = re.sub(r'("\s*)\n(\s*\},\s*\n\s*")', lambda m: m.group(1) + ',\n' + m.group(2).lstrip().lstrip('},').lstrip(), text)
+    # Simpler pass: remove any line that is exactly `},` (with optional spaces) between two object entries
+    text = re.sub(r'("[ \t]*)\n([ \t]*)\},[ \t]*\n([ \t]*")', r'\1,\n\3', text)
+    return text
+
 def _extract_json(text: str) -> Dict[str, Any]:
     m = re.search(r"```json\s*(\{.*?\})\s*```", text, flags=re.S)
     if m:
@@ -100,17 +110,19 @@ def _extract_json(text: str) -> Dict[str, Any]:
     starts = [i for i, ch in enumerate(text) if ch == "{"]
     for start in reversed(starts):
         candidate = text[start:].strip()
-        # Try as-is first
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
-            pass
-        # Try repairing truncated JSON by closing open brackets/quotes
-        for suffix in ('"}', '"}\n}', '}', '\n}'):
+        for repair in (lambda s: s, _repair_json):
+            c = repair(candidate)
+            # Try as-is
             try:
-                return json.loads(candidate + suffix)
+                return json.loads(c)
             except json.JSONDecodeError:
                 pass
+            # Try repairing truncated JSON by closing open brackets/quotes
+            for suffix in ('"}', '"}\n}', '}', '\n}'):
+                try:
+                    return json.loads(c + suffix)
+                except json.JSONDecodeError:
+                    pass
     raise ValueError(f"No valid JSON object found. Raw tail:\\n{text[-3000:]}")
 
 def generate_clip_e_mood(image: Image.Image) -> str:
