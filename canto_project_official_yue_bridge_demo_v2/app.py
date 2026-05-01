@@ -101,7 +101,11 @@ with st.sidebar:
         st.rerun()
 
     st.header("Step 2 — Multimodal LLM")
-    mm_model = st.text_input("Image-capable HF LLM", value="Qwen/Qwen2.5-VL-3B-Instruct")
+    MM_MODEL_OPTIONS = [
+        "Qwen/Qwen2.5-VL-3B-Instruct",
+        "OpenGVLab/InternVL2-8B",
+    ]
+    mm_model = st.selectbox("Image-capable HF LLM", options=MM_MODEL_OPTIONS, index=0)
     style = st.selectbox("Style preset", ["cantopop-ballad", "city-pop", "dream-pop"], index=0)
     line_count = st.selectbox("Lyric length", [4, 8], index=1)
     mm_temperature = st.number_input("MM temperature", min_value=0.1, max_value=1.5, value=0.7, step=0.1)

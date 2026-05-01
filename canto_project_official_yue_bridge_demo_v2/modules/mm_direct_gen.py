@@ -9,7 +9,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Dict, Any
 from PIL import Image
-from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+from transformers import AutoProcessor, AutoTokenizer, AutoModel, Qwen2_5_VLForConditionalGeneration
 from schemas import LyricsPromptBundle
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # Ensure repo root is in path for imports
@@ -39,23 +39,42 @@ def _norm_device(run_on_cpu: bool) -> str:
     torch = _torch()
     return "cpu" if run_on_cpu else ("cuda" if torch.cuda.is_available() else "cpu")
 
+def _is_internvl(model_id: str) -> bool:
+    return "InternVL" in model_id or "internvl" in model_id.lower()
+
 def _load_model(model_id: str, run_on_cpu: bool):
-    torch = _torch()
+    import torch
     device = _norm_device(run_on_cpu)
-    if model_id not in _PROCESSOR_CACHE:
-        _PROCESSOR_CACHE[model_id] = AutoProcessor.from_pretrained(
-            model_id,
-            trust_remote_code=True,
-            use_fast=True,
-        )
     cache_key = (model_id, device)
-    if cache_key not in _MODEL_CACHE:
-        kwargs = {"trust_remote_code": True}
-        if device == "cuda":
-            kwargs["torch_dtype"] = torch.float16
-        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model_id, **kwargs)
-        model = model.to(device)
-        _MODEL_CACHE[cache_key] = model
+
+    if _is_internvl(model_id):
+        # InternVL2 uses AutoTokenizer + AutoModel with trust_remote_code
+        if model_id not in _PROCESSOR_CACHE:
+            _PROCESSOR_CACHE[model_id] = AutoTokenizer.from_pretrained(
+                model_id, trust_remote_code=True, use_fast=False
+            )
+        if cache_key not in _MODEL_CACHE:
+            kwargs = {"trust_remote_code": True, "low_cpu_mem_usage": True}
+            if device == "cuda":
+                kwargs["torch_dtype"] = torch.float16
+            else:
+                kwargs["torch_dtype"] = torch.float32
+            model = AutoModel.from_pretrained(model_id, **kwargs).to(device).eval()
+            _MODEL_CACHE[cache_key] = model
+    else:
+        # Qwen2.5-VL uses AutoProcessor + Qwen2_5_VLForConditionalGeneration
+        if model_id not in _PROCESSOR_CACHE:
+            _PROCESSOR_CACHE[model_id] = AutoProcessor.from_pretrained(
+                model_id, trust_remote_code=True, use_fast=True
+            )
+        if cache_key not in _MODEL_CACHE:
+            kwargs = {"trust_remote_code": True}
+            if device == "cuda":
+                kwargs["torch_dtype"] = torch.float16
+            model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model_id, **kwargs)
+            model = model.to(device)
+            _MODEL_CACHE[cache_key] = model
+
     return _PROCESSOR_CACHE[model_id], _MODEL_CACHE[cache_key], device
 
 def _extract_json(text: str) -> Dict[str, Any]:
@@ -157,35 +176,60 @@ def generate_from_image(
     prompt = generate_prompt(image, style, line_count=line_count, user_style_hints=user_style_hints)
     processor, model, device = _load_model(model_id, run_on_cpu)
 
-    messages = [{
-        "role": "user",
-        "content": [
-            {"type": "image", "image": image},
-            {"type": "text", "text": prompt},
-        ],
-    }]
-    text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    inputs = processor(text=[text], images=[image], return_tensors="pt")
-    inputs = {k: v.to(device) if hasattr(v, "to") else v for k, v in inputs.items()}
-
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
+    if _is_internvl(model_id):
+        # InternVL2 inference path
+        import torchvision.transforms as T
+        from torchvision.transforms.functional import InterpolationMode
+        IMAGENET_MEAN = (0.485, 0.456, 0.406)
+        IMAGENET_STD = (0.229, 0.224, 0.225)
+        transform = T.Compose([
+            T.Resize((448, 448), interpolation=InterpolationMode.BICUBIC),
+            T.ToTensor(),
+            T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+        ])
+        pixel_values = transform(image).unsqueeze(0).to(
+            device, dtype=torch.float16 if device == "cuda" else torch.float32
+        )
+        generation_config = dict(
             do_sample=True,
             temperature=temperature,
             max_new_tokens=max_new_tokens,
         )
+        question = f"<image>\n{prompt}"
+        with torch.no_grad():
+            decoded = model.chat(processor, pixel_values, question, generation_config)
+    else:
+        # Qwen2.5-VL inference path
+        messages = [{
+            "role": "user",
+            "content": [
+                {"type": "image", "image": image},
+                {"type": "text", "text": prompt},
+            ],
+        }]
+        text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = processor(text=[text], images=[image], return_tensors="pt")
+        inputs = {k: v.to(device) if hasattr(v, "to") else v for k, v in inputs.items()}
 
-    input_len = inputs["input_ids"].shape[1]
-    generated_ids = outputs[:, input_len:]
-    decoded = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                do_sample=True,
+                temperature=temperature,
+                max_new_tokens=max_new_tokens,
+            )
+
+        input_len = inputs["input_ids"].shape[1]
+        generated_ids = outputs[:, input_len:]
+        decoded = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
 
     try:
         payload = _extract_json(decoded)
     except Exception as e:
         raise RuntimeError(f"Multimodal LLM did not return valid JSON. Raw tail:\\n{decoded[-5000:]}") from e
     finally:
-        del inputs, outputs
+        if not _is_internvl(model_id):
+            del inputs, outputs
         if device == "cuda" and torch.cuda.is_available():
             torch.cuda.empty_cache()
 
