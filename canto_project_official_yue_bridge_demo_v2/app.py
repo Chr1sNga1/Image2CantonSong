@@ -64,6 +64,15 @@ def load_image_lyrics_emotion_similarity_module() -> object:
     spec.loader.exec_module(module)
     return module
 
+def load_lyrics_format_transformer_score_module() -> object:
+    module_path = EVAL / "lyrics_format" / "lyrics_format_transformer_score.py"
+    spec = importlib.util.spec_from_file_location("lyrics_format_transformer_score", module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load lyrics format evaluation module from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 @st.dialog("Debug log")
 def show_debug_log(log_text: str):
     st.code(log_text, language="python")
@@ -74,6 +83,10 @@ def show_image_lyrics_alignment_debug_log(log_text: str):
 
 @st.dialog("Image-lyrics emotion debug log")
 def show_image_lyrics_emotion_debug_log(log_text: str):
+    st.code(log_text, language="python")
+    
+@st.dialog("Lyrics format evaluation debug log")
+def show_lyrics_format_evaluation_debug_log(log_text: str):
     st.code(log_text, language="python")
 
 if debug_mode:
@@ -188,7 +201,7 @@ if st.session_state["step_2_done"]:
     musical_key = st.text_input("Key", value=rawb.key)
 
     with st.expander("Evaluation", expanded=False):
-        eval_tabs = st.tabs(["Image-lyrics alignment (CLIP)", "Image-lyrics emotion similarity"])
+        eval_tabs = st.tabs(["Image-lyrics alignment (CLIP)", "Image-lyrics emotion similarity", "Lyrics format"])
         with eval_tabs[0]:
             description = ("Chinese CLIP (Contrastive Language-Image Pre-Training), "
                 "with ViT-B/16 as the image encoder and RoBERTa-wwm-base as the text encoder.")
@@ -309,6 +322,127 @@ if st.session_state["step_2_done"]:
                 st.error("Image-lyrics emotion similarity calculation failed.")
                 if st.button("View debug log", key="view_image_lyrics_emotion_debug"):
                     show_image_lyrics_emotion_debug_log(st.session_state["image_lyrics_emotion_similarity_error"])
+
+        with eval_tabs[2]:
+            st.write(
+                "Hybrid lyrics format evaluation. This checks section tags, blank lines, "
+                "and structural similarity against the reference lyric format. It does not judge lyric content quality."
+            )
+
+            lyrics_format_reference_path = PROJECT_ROOT / "Evaluation" / "lyrics_format" / "reference_lyrics_format.txt"
+
+            col_rule, col_transformer, col_sequence = st.columns(3)
+
+            with col_rule:
+                lyrics_rule_weight = st.number_input(
+                    "Rule weight",
+                    min_value=0.0,
+                    max_value=1.0,
+                    value=0.50,
+                    step=0.05,
+                    key="eval_lyrics_rule_weight",
+                )
+
+            with col_transformer:
+                lyrics_transformer_weight = st.number_input(
+                    "Transformer weight",
+                    min_value=0.0,
+                    max_value=1.0,
+                    value=0.30,
+                    step=0.05,
+                    key="eval_lyrics_transformer_weight",
+                )
+
+            with col_sequence:
+                lyrics_sequence_weight = st.number_input(
+                    "Sequence weight",
+                    min_value=0.0,
+                    max_value=1.0,
+                    value=0.20,
+                    step=0.05,
+                    key="eval_lyrics_sequence_weight",
+                )
+
+            lyrics_format_model_name = st.text_input(
+                "Transformer model",
+                value="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+                key="eval_lyrics_format_model_name",
+            )
+
+            lyrics_format_device = st.selectbox(
+                "Device",
+                ["auto", "cpu", "cuda"],
+                index=0,
+                key="eval_lyrics_format_device",
+            )
+
+            if st.button("Calculate lyrics format score", key="eval_lyrics_format_score"):
+                st.session_state["lyrics_format_score_result"] = None
+                st.session_state["lyrics_format_score_error"] = ""
+
+                try:
+                    if not lyrics_text.strip():
+                        raise ValueError("Lyrics text is empty.")
+
+                    lyrics_format_module = load_lyrics_format_transformer_score_module()
+
+                    reference_lyrics = None
+
+                    if lyrics_format_reference_path.exists():
+                        reference_lyrics = lyrics_format_reference_path.read_text(encoding="utf-8")
+
+                    device_arg = None if lyrics_format_device == "auto" else lyrics_format_device
+
+                    result = lyrics_format_module.score_lyrics_format_hybrid(
+                        json_input={"lyrics_text": lyrics_text.strip()},
+                        reference_lyrics=reference_lyrics,
+                        model_name=lyrics_format_model_name.strip(),
+                        device=device_arg,
+                        rule_weight=float(lyrics_rule_weight),
+                        transformer_weight=float(lyrics_transformer_weight),
+                        sequence_weight=float(lyrics_sequence_weight),
+                        return_details=True,
+                    )
+
+                    st.session_state["lyrics_format_score_result"] = result
+
+                except Exception:
+                    st.session_state["lyrics_format_score_error"] = traceback.format_exc()
+
+                st.rerun()
+
+            lyrics_format_result = st.session_state.get("lyrics_format_score_result")
+
+            if lyrics_format_result is not None:
+                score_value = float(lyrics_format_result.get("lyrics_format_score", 0.0))
+                grade = lyrics_format_result.get("grade", "unknown")
+
+                st.success(f"Lyrics format score: {score_value:.2f} / 100 ({grade})")
+
+                warnings = lyrics_format_result.get("warnings", [])
+                if warnings:
+                    st.warning("Format warnings:")
+                    for warning in warnings:
+                        st.write(f"- {warning}")
+                else:
+                    st.info("No format warnings detected.")
+
+                metrics = lyrics_format_result.get("metrics", {})
+                if metrics:
+                    show_metrics = st.checkbox(
+                        "Show lyrics format metrics",
+                        value=False,
+                        key="show_lyrics_format_metrics",
+                    )
+                    if show_metrics:
+                        st.json(metrics)
+
+            elif st.session_state.get("lyrics_format_score_error"):
+                st.error("Lyrics format evaluation failed.")
+                if st.button("View debug log", key="view_lyrics_format_debug"):
+                    show_lyrics_format_evaluation_debug_log(
+                        st.session_state["lyrics_format_score_error"]
+                    )
 
     if st.button("Confirm Lyrics & Prompt"):
         st.session_state["lyrics_prompt_confirmed"] = LyricsPromptBundle(
