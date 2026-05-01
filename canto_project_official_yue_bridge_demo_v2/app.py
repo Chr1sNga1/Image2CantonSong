@@ -103,7 +103,7 @@ with st.sidebar:
     st.header("Step 2 — Multimodal LLM")
     MM_MODEL_OPTIONS = [
         "Qwen/Qwen2.5-VL-3B-Instruct",
-        "OpenGVLab/InternVL2-8B",
+        "OpenGVLab/InternVL2-4B",
     ]
     mm_model = st.selectbox("Image-capable HF LLM", options=MM_MODEL_OPTIONS, index=0)
     style = st.selectbox("Style preset", ["cantopop-ballad", "city-pop", "dream-pop"], index=0)

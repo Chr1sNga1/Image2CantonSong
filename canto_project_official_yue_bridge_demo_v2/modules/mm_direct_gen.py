@@ -42,6 +42,7 @@ def _norm_device(run_on_cpu: bool) -> str:
 def _is_internvl(model_id: str) -> bool:
     return "InternVL" in model_id or "internvl" in model_id.lower()
 
+
 def _load_model(model_id: str, run_on_cpu: bool):
     import torch
     device = _norm_device(run_on_cpu)
