@@ -29,6 +29,8 @@ LABEL_MAPPING_EN = {
 class JohnsonChineseEmotion:
     """Chinese emotion predictor wrapper using Johnson8187/Chinese-Emotion."""
 
+    MAX_EMOTION_CLASSES = len(LABEL_MAPPING)
+
     def __init__(self, model_id: str = EMOTION_MODEL_ID, device: Optional[torch.device] = None, verbose: bool = True):
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         if verbose:
