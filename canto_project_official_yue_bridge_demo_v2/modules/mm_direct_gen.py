@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import Dict, Any
 from PIL import Image
 from transformers import AutoProcessor, AutoTokenizer, AutoModel, Qwen2_5_VLForConditionalGeneration
+from peft import PeftModel
 from schemas import LyricsPromptBundle
+
+# ── Set this to your HF Hub adapter repo ID after fine-tuning ─────────────
+# e.g. "your-hf-username/internvl2-4b-cantopop-lora"
+# Leave as None to use the base InternVL2-4B without the adapter.
+INTERNVL_ADAPTER_ID: str | None = None
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # Ensure repo root is in path for imports
 from paths import PROJECT_ROOT
@@ -51,8 +57,9 @@ def _load_model(model_id: str, run_on_cpu: bool):
     if _is_internvl(model_id):
         # InternVL2 uses AutoTokenizer + AutoModel with trust_remote_code
         if model_id not in _PROCESSOR_CACHE:
+            tokenizer_src = INTERNVL_ADAPTER_ID if INTERNVL_ADAPTER_ID else model_id
             _PROCESSOR_CACHE[model_id] = AutoTokenizer.from_pretrained(
-                model_id, trust_remote_code=True, use_fast=False
+                tokenizer_src, trust_remote_code=True, use_fast=False
             )
         if cache_key not in _MODEL_CACHE:
             kwargs = {"trust_remote_code": True, "low_cpu_mem_usage": True}
@@ -60,7 +67,13 @@ def _load_model(model_id: str, run_on_cpu: bool):
                 kwargs["torch_dtype"] = torch.float16
             else:
                 kwargs["torch_dtype"] = torch.float32
-            model = AutoModel.from_pretrained(model_id, **kwargs).to(device).eval()
+            base_model = AutoModel.from_pretrained(model_id, **kwargs).to(device).eval()
+            if INTERNVL_ADAPTER_ID:
+                # Load fine-tuned LoRA adapter from HF Hub
+                model = PeftModel.from_pretrained(base_model, INTERNVL_ADAPTER_ID)
+                model = model.eval()
+            else:
+                model = base_model
             _MODEL_CACHE[cache_key] = model
     else:
         # Qwen2.5-VL uses AutoProcessor + Qwen2_5_VLForConditionalGeneration
