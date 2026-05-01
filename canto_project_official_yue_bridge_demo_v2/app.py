@@ -125,10 +125,11 @@ with st.sidebar:
             help="Retrieve similar Cantopop lyrics from the corpus and inject them as few-shot examples into the prompt.",
         )
         if use_rag:
+            from modules.rag_retriever import DEFAULT_CSV_PATH as _DEFAULT_RAG_CSV
             rag_csv_path = st.text_input(
                 "Corpus CSV path",
-                value="cantopop_corpus_final_583_yue.csv",
-                help="Absolute or relative path to cantopop_corpus_final_583_yue.csv",
+                value=str(_DEFAULT_RAG_CSV),
+                help="Path to cantopop_corpus_final_583_yue.csv (defaults to repo root)",
             )
             rag_top_k = st.slider("RAG top-k examples", min_value=1, max_value=6, value=3)
             st.caption("📚 RAG injects the most similar lyrics as few-shot context to improve [verse]/[chorus] structure and style.")

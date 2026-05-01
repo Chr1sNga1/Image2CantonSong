@@ -12,6 +12,12 @@ from typing import List, Dict
 
 import numpy as np
 import pandas as pd
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from paths import PROJECT_ROOT
+
+# Default CSV is the corpus committed at the repo root (second_model branch)
+DEFAULT_CSV_PATH: Path = PROJECT_ROOT / "cantopop_corpus_final_583_yue.csv"
 
 # ── Lazy singletons ─────────────────────────────────────────────────────────
 _embedder = None
@@ -21,8 +27,13 @@ _corpus: List[str] = []
 CSV_PATH: Path | None = None  # set by init()
 
 
-def init(csv_path: str | Path) -> None:
-    """Load corpus and build FAISS index. Call once; subsequent calls are no-ops."""
+def init(csv_path: str | Path | None = None) -> None:
+    """Load corpus and build FAISS index. Call once; subsequent calls are no-ops.
+
+    If csv_path is omitted, uses DEFAULT_CSV_PATH (repo root).
+    """
+    if csv_path is None:
+        csv_path = DEFAULT_CSV_PATH
     global _embedder, _index, _corpus, CSV_PATH
 
     if _index is not None:

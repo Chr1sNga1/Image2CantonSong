@@ -208,10 +208,10 @@ def generate_from_image(
 
     # ── RAG: retrieve similar lyrics and inject as few-shot context ──────
     rag_few_shot_block = ""
-    if use_rag and _is_internvl(model_id) and rag_csv_path:
+    if use_rag and _is_internvl(model_id):
         try:
             from modules.rag_retriever import init as _rag_init, build_few_shot_block
-            _rag_init(rag_csv_path)
+            _rag_init(rag_csv_path or None)
             rag_query = (user_style_hints.strip() or style or "cantopop ballad 粵語")
             rag_few_shot_block = build_few_shot_block(rag_query, top_k=rag_top_k)
         except Exception as _rag_err:
