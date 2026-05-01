@@ -100,8 +100,40 @@ with st.sidebar:
         hard_reset()
         st.rerun()
 
+    st.header("HuggingFace")
+    hf_token = st.text_input("HF Token", type="password", placeholder="hf_...")
+    if hf_token:
+        st.caption("✅ Token provided — used to load private HF models/adapters.")
+    else:
+        st.caption("⚠️ Leave blank if all models are public.")
+
     st.header("Step 2 — Multimodal LLM")
-    mm_model = st.text_input("Image-capable HF LLM", value="Qwen/Qwen2.5-VL-3B-Instruct")
+    MM_MODEL_OPTIONS = [
+        "Qwen/Qwen2.5-VL-3B-Instruct",
+        "OpenGVLab/InternVL2-4B",
+    ]
+    mm_model = st.selectbox("Image-capable HF LLM", options=MM_MODEL_OPTIONS, index=0)
+
+    # RAG — only available for InternVL2-4B
+    use_rag = False
+    rag_csv_path = ""
+    rag_top_k = 3
+    if mm_model == "OpenGVLab/InternVL2-4B":
+        use_rag = st.checkbox(
+            "Use RAG (corpus-augmented lyrics)",
+            value=False,
+            help="Retrieve similar Cantopop lyrics from the corpus and inject them as few-shot examples into the prompt.",
+        )
+        if use_rag:
+            from modules.rag_retriever import DEFAULT_CSV_PATH as _DEFAULT_RAG_CSV
+            rag_csv_path = st.text_input(
+                "Corpus CSV path",
+                value=str(_DEFAULT_RAG_CSV),
+                help="Path to cantopop_corpus_final_583_yue.csv (defaults to repo root)",
+            )
+            rag_top_k = st.slider("RAG top-k examples", min_value=1, max_value=6, value=3)
+            st.caption("📚 RAG injects the most similar lyrics as few-shot context to improve [verse]/[chorus] structure and style.")
+
     style = st.selectbox("Style preset", ["cantopop-ballad", "city-pop", "dream-pop"], index=0)
     line_count = st.selectbox("Lyric length", [4, 8], index=1)
     mm_temperature = st.number_input("MM temperature", min_value=0.1, max_value=1.5, value=0.7, step=0.1)
@@ -171,6 +203,10 @@ if st.session_state["step_1_done"]:
                 max_new_tokens=int(mm_max_new_tokens),
                 user_style_hints=user_style_hints,
                 run_on_cpu=bool(mm_run_on_cpu),
+                hf_token=hf_token or None,
+                use_rag=use_rag,
+                rag_csv_path=rag_csv_path,
+                rag_top_k=rag_top_k,
             )
             st.session_state["step_2_done"] = True
             st.session_state["step_3_done"] = False

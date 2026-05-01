@@ -9,8 +9,14 @@ from io import BytesIO
 from pathlib import Path
 from typing import Dict, Any
 from PIL import Image
-from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+from transformers import AutoProcessor, AutoTokenizer, AutoModel, Qwen2_5_VLForConditionalGeneration
+from peft import PeftModel
 from schemas import LyricsPromptBundle
+
+# ── Set this to your HF Hub adapter repo ID after fine-tuning ─────────────
+# e.g. "your-hf-username/internvl2-4b-cantopop-lora"
+# Leave as None to use the base InternVL2-4B without the adapter.
+INTERNVL_ADAPTER_ID: str | None = None  # LoRA adapter not ready yet; using base model
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # Ensure repo root is in path for imports
 from paths import PROJECT_ROOT
@@ -39,24 +45,61 @@ def _norm_device(run_on_cpu: bool) -> str:
     torch = _torch()
     return "cpu" if run_on_cpu else ("cuda" if torch.cuda.is_available() else "cpu")
 
+def _is_internvl(model_id: str) -> bool:
+    return "InternVL" in model_id or "internvl" in model_id.lower()
+
+
 def _load_model(model_id: str, run_on_cpu: bool):
-    torch = _torch()
+    import torch
     device = _norm_device(run_on_cpu)
-    if model_id not in _PROCESSOR_CACHE:
-        _PROCESSOR_CACHE[model_id] = AutoProcessor.from_pretrained(
-            model_id,
-            trust_remote_code=True,
-            use_fast=True,
-        )
     cache_key = (model_id, device)
-    if cache_key not in _MODEL_CACHE:
-        kwargs = {"trust_remote_code": True}
-        if device == "cuda":
-            kwargs["torch_dtype"] = torch.float16
-        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model_id, **kwargs)
-        model = model.to(device)
-        _MODEL_CACHE[cache_key] = model
+
+    if _is_internvl(model_id):
+        # InternVL2 uses AutoTokenizer + AutoModel with trust_remote_code
+        if model_id not in _PROCESSOR_CACHE:
+            tokenizer_src = INTERNVL_ADAPTER_ID if INTERNVL_ADAPTER_ID else model_id
+            _PROCESSOR_CACHE[model_id] = AutoTokenizer.from_pretrained(
+                tokenizer_src, trust_remote_code=True, use_fast=False
+            )
+        if cache_key not in _MODEL_CACHE:
+            kwargs = {"trust_remote_code": True, "low_cpu_mem_usage": True}
+            if device == "cuda":
+                kwargs["torch_dtype"] = torch.float16
+            else:
+                kwargs["torch_dtype"] = torch.float32
+            base_model = AutoModel.from_pretrained(model_id, **kwargs).to(device).eval()
+            if INTERNVL_ADAPTER_ID:
+                # Load fine-tuned LoRA adapter from HF Hub
+                model = PeftModel.from_pretrained(base_model, INTERNVL_ADAPTER_ID)
+                model = model.eval()
+            else:
+                model = base_model
+            _MODEL_CACHE[cache_key] = model
+    else:
+        # Qwen2.5-VL uses AutoProcessor + Qwen2_5_VLForConditionalGeneration
+        if model_id not in _PROCESSOR_CACHE:
+            _PROCESSOR_CACHE[model_id] = AutoProcessor.from_pretrained(
+                model_id, trust_remote_code=True, use_fast=True
+            )
+        if cache_key not in _MODEL_CACHE:
+            kwargs = {"trust_remote_code": True}
+            if device == "cuda":
+                kwargs["torch_dtype"] = torch.float16
+            model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model_id, **kwargs)
+            model = model.to(device)
+            _MODEL_CACHE[cache_key] = model
+
     return _PROCESSOR_CACHE[model_id], _MODEL_CACHE[cache_key], device
+
+def _repair_json(text: str) -> str:
+    """Apply heuristic fixes for common model JSON-formatting errors."""
+    # Remove spurious lone `},` lines that appear between key-value pairs.
+    # Pattern: a closing quote of a value, then a line with just `},`, then the next key.
+    # e.g.  "last lyric line"\n  },\n  "genre_prompt"  →  "last lyric line",\n  "genre_prompt"
+    text = re.sub(r'("\s*)\n(\s*\},\s*\n\s*")', lambda m: m.group(1) + ',\n' + m.group(2).lstrip().lstrip('},').lstrip(), text)
+    # Simpler pass: remove any line that is exactly `},` (with optional spaces) between two object entries
+    text = re.sub(r'("[ \t]*)\n([ \t]*)\},[ \t]*\n([ \t]*")', r'\1,\n\3', text)
+    return text
 
 def _extract_json(text: str) -> Dict[str, Any]:
     m = re.search(r"```json\s*(\{.*?\})\s*```", text, flags=re.S)
@@ -67,10 +110,19 @@ def _extract_json(text: str) -> Dict[str, Any]:
     starts = [i for i, ch in enumerate(text) if ch == "{"]
     for start in reversed(starts):
         candidate = text[start:].strip()
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
+        for repair in (lambda s: s, _repair_json):
+            c = repair(candidate)
+            # Try as-is
+            try:
+                return json.loads(c)
+            except json.JSONDecodeError:
+                pass
+            # Try repairing truncated JSON by closing open brackets/quotes
+            for suffix in ('"}', '"}\n}', '}', '\n}'):
+                try:
+                    return json.loads(c + suffix)
+                except json.JSONDecodeError:
+                    pass
     raise ValueError(f"No valid JSON object found. Raw tail:\\n{text[-3000:]}")
 
 def generate_clip_e_mood(image: Image.Image) -> str:
@@ -108,25 +160,32 @@ def generate_clip_e_mood(image: Image.Image) -> str:
             break
     return ", ".join(labels) if labels else "情緒模糊"
 
-def generate_prompt(image: Image.Image, style: str, line_count: int = 8, user_style_hints: str = "") -> str:
+def generate_prompt(
+    image: Image.Image,
+    style: str,
+    line_count: int = 8,
+    user_style_hints: str = "",
+    rag_few_shot_block: str = "",
+) -> str:
     """Return the formatted prompt text for the multimodal model."""
     mood_text = generate_clip_e_mood(image)
     style_hint = user_style_hints.strip() or style or "無"
-    return f"""
-你是一個粵語流行歌作詞與音樂企劃助手。請直接觀看這張圖片，輸出一份基於圖片內容的歌曲方案。
+    rag_section = f"\n{rag_few_shot_block}\n" if rag_few_shot_block else ""
+    return f"""{rag_section}
+你是一位香港粵語流行歌作詞助手。請直接觀看這張圖片，輸出一個完整的 JSON 物件（不得截斷）。
 
-硬性要求：
-1. 歌詞必須使用繁體中文，適合香港粵語演唱。
-2. 歌詞要明確呼應圖片中的人物、場景、動作、道具與氛圍。
-3. 不要求口語化，但不能寫成明顯普通話朗讀腔。
-4. 歌詞總長約 {line_count} 行，必須分成 [verse] 和 [chorus]。
-5. 只允許輸出一個 JSON 物件，不要輸出任何額外文字。
+【強制要求】
+1. 所有中文必須使用繁體字（Traditional Chinese），嚴禁使用任何簡體字。
+2. 歌詞語言為書面粵語，適合香港人演唱，不得使用普通話用語。
+3. 歌詞須呼應圖片的人物、場景與氛圍。
+4. 歌詞約 {line_count} 行，分成 [verse] 與 [chorus] 兩段。
+5. 只輸出以下 JSON 物件，不得加入任何其他文字、解釋或 markdown。
+6. JSON 必須完整，所有括號均須閉合。
 
-JSON 格式如下：
 {{
-  "visual_anchor": "...",
-  "title": "...",
-  "lyrics_text": "[verse]\\n...\\n\\n[chorus]\\n...",
+  "visual_anchor": "用繁體中文描述圖片主要視覺元素",
+  "title": "繁體中文歌名",
+  "lyrics_text": "[verse]\\n繁體歌詞...\\n\\n[chorus]\\n繁體歌詞...",
   "genre_prompt": "cantopop ballad piano guitar sentimental female airy vocal Cantonese",
   "music_prompt": "melodic singing, full accompaniment, expressive chorus, not narration",
   "negative_prompt": "Mandarin pronunciation, spoken word, narration, recitation, monotone",
@@ -134,10 +193,8 @@ JSON 格式如下：
   "key": "F major"
 }}
 
-補充風格提示：
-{style_hint}
-
-The image is likely of mood {mood_text}.
+補充風格提示：{style_hint}
+圖片情緒：{mood_text}
 """.strip()
 
 
@@ -147,45 +204,100 @@ def generate_from_image(
     style: str = "cantopop-ballad",
     line_count: int = 8,
     temperature: float = 0.7,
-    max_new_tokens: int = 448,
     user_style_hints: str = "",
     run_on_cpu: bool = False,
+    hf_token: str | None = None,
+    use_rag: bool = False,
+    rag_csv_path: str = "",
+    rag_top_k: int = 3,
+    max_new_tokens: int = 1024,
 ) -> LyricsPromptBundle:
     torch = _torch()
+    # Log in to HF Hub if token provided (needed for private adapter repos)
+    if hf_token:
+        try:
+            from huggingface_hub import login as _hf_login
+            _hf_login(token=hf_token, add_to_git_credential=False)
+        except Exception:
+            pass
     image = Image.open(BytesIO(image_bytes)).convert("RGB")
     image.thumbnail((1024, 1024))
-    prompt = generate_prompt(image, style, line_count=line_count, user_style_hints=user_style_hints)
+
+    # ── RAG: retrieve similar lyrics and inject as few-shot context ──────
+    rag_few_shot_block = ""
+    if use_rag and _is_internvl(model_id):
+        try:
+            from modules.rag_retriever import init as _rag_init, build_few_shot_block
+            _rag_init(rag_csv_path or None)
+            rag_query = (user_style_hints.strip() or style or "cantopop ballad 粵語")
+            rag_few_shot_block = build_few_shot_block(rag_query, top_k=rag_top_k)
+        except Exception as _rag_err:
+            warnings.warn(f"RAG retrieval failed, falling back to base prompt: {_rag_err}")
+
+    prompt = generate_prompt(
+        image, style,
+        line_count=line_count,
+        user_style_hints=user_style_hints,
+        rag_few_shot_block=rag_few_shot_block,
+    )
     processor, model, device = _load_model(model_id, run_on_cpu)
 
-    messages = [{
-        "role": "user",
-        "content": [
-            {"type": "image", "image": image},
-            {"type": "text", "text": prompt},
-        ],
-    }]
-    text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    inputs = processor(text=[text], images=[image], return_tensors="pt")
-    inputs = {k: v.to(device) if hasattr(v, "to") else v for k, v in inputs.items()}
-
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
+    if _is_internvl(model_id):
+        # InternVL2 inference path
+        import torchvision.transforms as T
+        from torchvision.transforms.functional import InterpolationMode
+        IMAGENET_MEAN = (0.485, 0.456, 0.406)
+        IMAGENET_STD = (0.229, 0.224, 0.225)
+        transform = T.Compose([
+            T.Resize((448, 448), interpolation=InterpolationMode.BICUBIC),
+            T.ToTensor(),
+            T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+        ])
+        pixel_values = transform(image).unsqueeze(0).to(
+            device, dtype=torch.float16 if device == "cuda" else torch.float32
+        )
+        generation_config = dict(
             do_sample=True,
             temperature=temperature,
             max_new_tokens=max_new_tokens,
         )
+        # Prepend system instruction into the question (InternVL2 chat may or may not accept system_message kwarg)
+        system_prefix = "【指令】你是香港粵語歌詞創作助手。所有中文必須使用繁體字。只輸出完整 JSON 物件，不得截斷，不得加入其他文字。\n\n"
+        question = f"<image>\n{system_prefix}{prompt}"
+        with torch.no_grad():
+            decoded = model.chat(processor, pixel_values, question, generation_config)
+    else:
+        # Qwen2.5-VL inference path
+        messages = [{
+            "role": "user",
+            "content": [
+                {"type": "image", "image": image},
+                {"type": "text", "text": prompt},
+            ],
+        }]
+        text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = processor(text=[text], images=[image], return_tensors="pt")
+        inputs = {k: v.to(device) if hasattr(v, "to") else v for k, v in inputs.items()}
 
-    input_len = inputs["input_ids"].shape[1]
-    generated_ids = outputs[:, input_len:]
-    decoded = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                do_sample=True,
+                temperature=temperature,
+                max_new_tokens=max_new_tokens,
+            )
+
+        input_len = inputs["input_ids"].shape[1]
+        generated_ids = outputs[:, input_len:]
+        decoded = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
 
     try:
         payload = _extract_json(decoded)
     except Exception as e:
         raise RuntimeError(f"Multimodal LLM did not return valid JSON. Raw tail:\\n{decoded[-5000:]}") from e
     finally:
-        del inputs, outputs
+        if not _is_internvl(model_id):
+            del inputs, outputs
         if device == "cuda" and torch.cuda.is_available():
             torch.cuda.empty_cache()
 
