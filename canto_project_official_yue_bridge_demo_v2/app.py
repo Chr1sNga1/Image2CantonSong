@@ -451,9 +451,9 @@ if st.session_state["step_2_done"]:
     genre_prompt = st.text_area("Genre prompt", value=rawb.genre_prompt)
     
     # metadata from multimodal model, for debugging and evaluation purposes
-    with st.expander("Step 2 metadata", expanded=False):
-        st.write("**Generation metadata from multimodal lyrics model:**")
-        st.json(rawb.raw_meta)
+    # with st.expander("Step 2 metadata", expanded=False):
+        # st.write("**Generation metadata from multimodal lyrics model:**")
+        # st.json(rawb.raw_meta)
 
     with st.expander("Evaluation", expanded=False):
         eval_tabs = st.tabs(["Image-lyrics alignment (CLIP)", "Image-lyrics emotion similarity", "Lyrics format"])
