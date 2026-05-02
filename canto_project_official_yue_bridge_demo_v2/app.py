@@ -26,6 +26,25 @@ parser.add_argument("--debug", action="store_true")
 args, _ = parser.parse_known_args()
 debug_mode = args.debug
 
+LYRIC_LENGTH_TO_SEGMENTS = {
+    4: 2,
+    8: 3,
+    16: 5,
+}
+
+
+def sync_run_n_segments_to_line_count() -> None:
+    """Update run_n_segments when lyric length changes.
+
+    User can still manually edit run_n_segments afterwards.
+    """
+    line_count_value = int(st.session_state.get("line_count", 8))
+    st.session_state["run_n_segments"] = LYRIC_LENGTH_TO_SEGMENTS.get(
+        line_count_value,
+        3,
+    )
+    
+
 def load_example_prompt_bundle() -> LyricsPromptBundle:
     example_path = Path(__file__).resolve().parent / "examples" \
                         / "noosa_everglades_prompt_bundle.json"
@@ -157,7 +176,24 @@ with st.sidebar:
             st.caption("📚 RAG injects the most similar lyrics as few-shot context to improve [verse]/[chorus] structure and style.")
 
     style = st.selectbox("Style preset", ["cantopop-ballad", "city-pop", "dream-pop"], index=0)
-    line_count = st.selectbox("Lyric length", [4, 8, 16], index=1)
+    
+    # line_count = st.selectbox("Lyric length", [4, 8, 16], index=1)
+    
+    if "line_count" not in st.session_state:
+        st.session_state["line_count"] = 8
+
+    if "run_n_segments" not in st.session_state:
+        st.session_state["run_n_segments"] = LYRIC_LENGTH_TO_SEGMENTS[
+            int(st.session_state["line_count"])
+        ]
+
+    line_count = st.selectbox(
+        "Lyric length",
+        [4, 8, 16],
+        key="line_count",
+        on_change=sync_run_n_segments_to_line_count,
+    )
+    
     mm_temperature = st.number_input("MM temperature", min_value=0.1, max_value=1.5, value=0.7, step=0.1)
     mm_max_new_tokens = st.number_input("MM max_new_tokens", min_value=128, max_value=2048, value=2048, step=64)
     mm_run_on_cpu = st.checkbox("Run multimodal lyrics model on CPU", value=False)
@@ -167,7 +203,14 @@ with st.sidebar:
     output_dir = st.text_input("Output dir", value="outputs")
     stage1_model = st.text_input("Stage 1 model", value="m-a-p/YuE-s1-7B-anneal-zh-cot")
     stage2_model = st.text_input("Stage 2 model", value="m-a-p/YuE-s2-1B-general")
-    run_n_segments = st.number_input("run_n_segments", min_value=1, max_value=12, value=3, step=1)
+    # run_n_segments = st.number_input("run_n_segments", min_value=1, max_value=12, value=3, step=1)
+    run_n_segments = st.number_input(
+        "run_n_segments",
+        min_value=1,
+        max_value=12,
+        step=1,
+        key="run_n_segments",
+    )
     stage2_batch_size = st.number_input("stage2_batch_size", min_value=1, max_value=32, value=4, step=1)
     yue_max_new_tokens = st.number_input("YuE max_new_tokens", min_value=128, max_value=12000, value=3000, step=64)
     repetition_penalty = st.number_input("repetition_penalty", min_value=1.0, max_value=2.0, value=1.1, step=0.05)
