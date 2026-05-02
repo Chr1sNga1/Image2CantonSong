@@ -158,6 +158,7 @@ def load_image_lyrics_emotion_similarity_module() -> object:
     spec.loader.exec_module(module)
     return module
 
+
 def load_lyrics_format_transformer_score_module() -> object:
     module_path = EVAL / "lyrics_format" / "lyrics_format_transformer_score.py"
     spec = importlib.util.spec_from_file_location("lyrics_format_transformer_score", module_path)
@@ -166,6 +167,43 @@ def load_lyrics_format_transformer_score_module() -> object:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def load_cantonese_lyrics_quality_module() -> object:
+    module_path = EVAL / "lyrics_quality" / "lyrics_quality_evaluation.py"
+    spec = importlib.util.spec_from_file_location("lyrics_quality_evaluation", module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load lyrics quality module from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def strip_lyrics_section_tags(lyrics_text: str) -> str:
+    """Remove section tags before Cantonese lyrics quality evaluation."""
+    section_tags = {
+        "[verse]",
+        "[chorus]",
+        "[bridge]",
+        "[outro]",
+        "[end]",
+    }
+
+    lines = []
+
+    for line in lyrics_text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        stripped = line.strip()
+
+        if not stripped:
+            continue
+
+        if stripped.lower() in section_tags:
+            continue
+
+        lines.append(stripped)
+
+    return "\n".join(lines)
+
 
 def reset_evaluation_results() -> None:
     """Clear all evaluation results when a new lyrics prompt is generated."""
@@ -183,6 +221,12 @@ def reset_evaluation_results() -> None:
         # Lyrics format evaluation
         "lyrics_format_score_result",
         "lyrics_format_score_error",
+        "show_lyrics_format_metrics",
+
+        # Cantonese lyrics quality evaluation
+        "cantonese_lyrics_quality_result",
+        "cantonese_lyrics_quality_error",
+        "show_cantonese_rhyme_debug",
     ]
 
     for key in keys_to_clear:
@@ -204,11 +248,15 @@ def show_image_lyrics_emotion_debug_log(log_text: str):
 @st.dialog("Lyrics format evaluation debug log")
 def show_lyrics_format_evaluation_debug_log(log_text: str):
     st.code(log_text, language="python")
+    
+@st.dialog("lyrics quality debug log")
+def show_cantonese_lyrics_quality_debug_log(log_text: str):
+    st.code(log_text, language="python")
 
 if debug_mode:
     st.info("Debug mode enabled.")
 
-st.title("🎵 Project Demo — Official YuE Bridge")
+st.title("🎵 Image2CantonSong")
 st.caption("Image → multimodal lyrics draft → manual confirm → final generation by original YuE environment")
 
 with st.sidebar:
@@ -456,7 +504,12 @@ if st.session_state["step_2_done"]:
         # st.json(rawb.raw_meta)
 
     with st.expander("Evaluation", expanded=False):
-        eval_tabs = st.tabs(["Image-lyrics alignment (CLIP)", "Image-lyrics emotion similarity", "Lyrics format"])
+        eval_tabs = st.tabs([
+            "Image-lyrics alignment (CLIP)",
+            "Image-lyrics emotion similarity",
+            "Lyrics format",
+            "lyrics quality",
+        ])
         with eval_tabs[0]:
             description = ("Chinese CLIP (Contrastive Language-Image Pre-Training), "
                 "with ViT-B/16 as the image encoder and RoBERTa-wwm-base as the text encoder.")
@@ -697,6 +750,101 @@ if st.session_state["step_2_done"]:
                     show_lyrics_format_evaluation_debug_log(
                         st.session_state["lyrics_format_score_error"]
                     )
+                    
+        with eval_tabs[3]:
+            st.write(
+                "Evaluate Cantonese lyric quality using tonal aesthetics, rhyme consistency, "
+                "lexical diversity, structural regularity, semantic coherence, and naturalness."
+            )
+
+            st.caption(
+                "Section tags such as [verse], [chorus], [bridge], [outro], and [end] "
+                "will be removed before quality evaluation."
+            )
+
+            if st.button("Calculate Cantonese lyrics quality", key="eval_cantonese_lyrics_quality"):
+                st.session_state["cantonese_lyrics_quality_result"] = None
+                st.session_state["cantonese_lyrics_quality_error"] = ""
+
+                try:
+                    cleaned_lyrics_for_quality = strip_lyrics_section_tags(lyrics_text)
+
+                    if not cleaned_lyrics_for_quality.strip():
+                        raise ValueError("Lyrics text is empty after removing section tags.")
+
+                    quality_module = load_cantonese_lyrics_quality_module()
+
+                    result = quality_module.evaluate_cantonese_lyrics(
+                        cleaned_lyrics_for_quality
+                    )
+
+                    st.session_state["cantonese_lyrics_quality_result"] = result
+
+                except Exception:
+                    st.session_state["cantonese_lyrics_quality_error"] = traceback.format_exc()
+
+                st.rerun()
+
+            quality_result = st.session_state.get("cantonese_lyrics_quality_result")
+
+            if quality_result is not None:
+                overall = float(quality_result.get("overall", 0.0))
+                grade = quality_result.get("grade", "unknown")
+
+                st.success(
+                    f"Cantonese lyrics quality: {overall:.4f} / 1.0000 ({grade})"
+                )
+
+                scores = quality_result.get("scores", {})
+
+                if scores:
+                    st.write("**Metric scores:**")
+
+                    metric_labels = {
+                        "tonal": "Tonal aesthetics",
+                        "rhyme": "Rhyme consistency",
+                        "lexical": "Lexical diversity",
+                        "structure": "Structural regularity",
+                        "coherence": "Semantic coherence",
+                        "natural": "Naturalness",
+                    }
+
+                    for key, label in metric_labels.items():
+                        value = scores.get(key)
+
+                        if value is None:
+                            st.write(f"- {label}: N/A")
+                        else:
+                            st.write(f"- {label}: {float(value):.4f}")
+
+                suggestions = quality_result.get("suggestions", [])
+
+                if suggestions:
+                    st.warning("Suggestions:")
+                    for item in suggestions:
+                        st.write(f"- {item}")
+                else:
+                    st.info("No major quality suggestions detected.")
+
+                rhyme_debug = quality_result.get("rhyme_debug", {})
+
+                show_rhyme_debug = st.checkbox(
+                    "Show rhyme debug",
+                    value=False,
+                    key="show_cantonese_rhyme_debug",
+                )
+
+                if show_rhyme_debug:
+                    st.json(rhyme_debug)
+
+            elif st.session_state.get("cantonese_lyrics_quality_error"):
+                st.error("Cantonese lyrics quality evaluation failed.")
+
+                if st.button("View debug log", key="view_cantonese_lyrics_quality_debug"):
+                    show_cantonese_lyrics_quality_debug_log(
+                        st.session_state["cantonese_lyrics_quality_error"]
+                    )
+
 
     if st.button("Confirm Lyrics & Prompt"):
         # lyrics_text_clean = normalize_lyrics_format(lyrics_text)
