@@ -367,8 +367,12 @@ with st.sidebar:
             int(st.session_state["line_count"])
         ]
 
-    user_style_hints = st.text_input("Optional style hints", value="male or female cantopop vocal, emotionally expressive")
-
+    user_style_hints = st.text_input(
+        "Optional style hints",
+        value="",
+        placeholder="e.g. male or female cantopop vocal, emotionally expressive"
+    )
+    
     line_count = st.selectbox(
         "Lyric length",
         [4, 8, 16],
