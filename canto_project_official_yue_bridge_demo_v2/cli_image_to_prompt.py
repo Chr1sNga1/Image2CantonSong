@@ -31,6 +31,7 @@ repo_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(repo_root))
 from paths import PROJECT_ROOT, DEMO, IMAGES, IPP
 
+# TODO No need to "export" HF_token and model
 
 def parse_args() -> argparse.Namespace:
     default_input = IMAGES
