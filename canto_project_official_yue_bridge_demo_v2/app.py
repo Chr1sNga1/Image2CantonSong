@@ -298,10 +298,10 @@ with st.sidebar:
             rag_top_k = st.slider("RAG top-k examples", min_value=1, max_value=6, value=3)
             st.caption("📚 RAG injects the most similar lyrics as few-shot context to improve [verse]/[chorus] structure and style.")
 
-    st.subheader("Style source")
+    # st.subheader("Style source")
 
     style_source = st.radio(
-        "Choose style source",
+        "Choose genre prompt source",
         [
             "Preset",
             "Select tags from list",
@@ -367,6 +367,8 @@ with st.sidebar:
             int(st.session_state["line_count"])
         ]
 
+    user_style_hints = st.text_input("Optional style hints", value="male or female cantopop vocal, emotionally expressive")
+
     line_count = st.selectbox(
         "Lyric length",
         [4, 8, 16],
@@ -377,13 +379,11 @@ with st.sidebar:
     mm_temperature = st.number_input("MM temperature", min_value=0.1, max_value=1.5, value=0.7, step=0.1)
     mm_max_new_tokens = st.number_input("MM max_new_tokens", min_value=128, max_value=2048, value=2048, step=64)
     mm_run_on_cpu = st.checkbox("Run multimodal lyrics model on CPU", value=False)
-    # user_style_hints = st.text_input("Optional style hints", value="male or female cantopop vocal, emotionally expressive")
 
     st.header("Step 4 — Original YuE")
     output_dir = st.text_input("Output dir", value="outputs")
     stage1_model = st.text_input("Stage 1 model", value="m-a-p/YuE-s1-7B-anneal-zh-cot")
     stage2_model = st.text_input("Stage 2 model", value="m-a-p/YuE-s2-1B-general")
-    # run_n_segments = st.number_input("run_n_segments", min_value=1, max_value=12, value=3, step=1)
     run_n_segments = st.number_input(
         "run_n_segments",
         min_value=1,
@@ -456,7 +456,7 @@ if st.session_state["step_1_done"]:
                 line_count=int(line_count),
                 temperature=float(mm_temperature),
                 max_new_tokens=int(mm_max_new_tokens),
-                # user_style_hints=user_style_hints,
+                user_style_hints=user_style_hints,
                 run_on_cpu=bool(mm_run_on_cpu),
                 hf_token=hf_token,
                 use_rag=bool(use_rag),

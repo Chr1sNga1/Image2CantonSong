@@ -391,13 +391,13 @@ def generate_prompt(
     image: Image.Image,
     style: str,
     line_count: int = 8,
-    # user_style_hints: str = "",
+    user_style_hints: str = "",
     rag_few_shot_block: str = "",
     genre_prompt_mode: str = "generated",
 ) -> str:
     """Return the formatted prompt text for the multimodal model."""
     mood_text = generate_clip_e_mood(image)
-    # style_hint = user_style_hints.strip() or "無"
+    style_hint = user_style_hints.strip() or "無"
     style_prompt = style.strip()
     rag_section = f"\n{rag_few_shot_block}\n" if rag_few_shot_block else ""
 
@@ -474,6 +474,7 @@ lyrics_text 必須嚴格使用以下結構：
   "lyrics_text": "{lyrics_json_example}"
 }}
 
+補充風格提示：{style_hint}
 圖片情緒：{mood_text}
 """.strip()
 
@@ -484,7 +485,7 @@ def generate_from_image(
     style: str = "",
     line_count: int = 8,
     temperature: float = 0.7,
-    # user_style_hints: str = "",
+    user_style_hints: str = "",
     run_on_cpu: bool = False,
     hf_token: str | None = None,
     use_rag: bool = False,
@@ -519,7 +520,7 @@ def generate_from_image(
         image,
         style,
         line_count=line_count,
-        # user_style_hints=user_style_hints,
+        user_style_hints=user_style_hints,
         rag_few_shot_block=rag_few_shot_block,
         genre_prompt_mode=genre_prompt_mode,
     )
