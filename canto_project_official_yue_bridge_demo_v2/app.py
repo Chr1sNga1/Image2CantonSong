@@ -23,8 +23,14 @@ init_state()
 
 parser = argparse.ArgumentParser(add_help=False)
 parser.add_argument("--debug", action="store_true")
+parser.add_argument(
+    "--presentation",
+    action="store_true",
+    help="Use presentation mode placeholders for image-lyrics emotion similarity.",
+)
 args, _ = parser.parse_known_args()
 debug_mode = args.debug
+presentation_mode = args.presentation
 
 LYRIC_LENGTH_TO_SEGMENTS = {
     4: 2,
@@ -162,6 +168,28 @@ def load_image_lyrics_emotion_similarity_module() -> object:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def load_presentation_mode_emotion_similarity_results(
+    text_emotion_model: str,
+) -> dict:
+    """Return placeholder image-lyrics emotion similarity results for presentation mode."""
+    return {
+        "similarity": 0.92,
+        #"image_predictions": [
+        #    {"label": "Melancholic", "score": 0.88},
+        #    {"label": "Nostalgic", "score": 0.65},
+        #],
+        "text_predictions": [
+            {"label": "confusion", "score": 0.75},
+            {"label": "sadness", "score": 0.6},
+            {"label": "neglect", "score": 0.5},
+            {"label": "enthrallment", "score": 0.4},
+        ],
+        "text_emotion_model": text_emotion_model,
+        "embedding_model_name": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
+        #"image_model_type": "25cat",
+    }
 
 
 def load_lyrics_format_transformer_score_module() -> object:
@@ -607,29 +635,34 @@ if st.session_state["step_2_done"]:
                         raise ValueError("Please upload an image first.")
                     image = Image.open(BytesIO(st.session_state["uploaded_image_bytes"])).convert("RGB")
 
-                    emotion_module = load_image_lyrics_emotion_similarity_module()
-                    if selected_mood_tags:
-                        results = emotion_module.evaluate_emotion_similarity_with_user_mood_tags(
-                            mood_words=selected_mood_tags,
-                            lyrics_text=lyrics_text.strip(),
+                    if presentation_mode:
+                        results = load_presentation_mode_emotion_similarity_results(
                             text_emotion_model=text_emotion_model,
-                            top_k_text=int(top_k_text_eval),
-                            embedding_model_name="sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
-                            embedding_device=None,
-                            verbose=False,
                         )
                     else:
-                        results = emotion_module.evaluate_emotion_similarity_with_image(
-                            image=image,
-                            lyrics_text=lyrics_text.strip(),
-                            top_k_image=top_k_image_eval,
-                            top_k_text=top_k_text_eval,
-                            image_model_type="25cat",
-                            text_emotion_model=text_emotion_model,
-                            embedding_model_name="sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
-                            embedding_device=None,
-                            verbose=False,
-                        )
+                        emotion_module = load_image_lyrics_emotion_similarity_module()
+                        if selected_mood_tags:
+                            results = emotion_module.evaluate_emotion_similarity_with_user_mood_tags(
+                                mood_words=selected_mood_tags,
+                                lyrics_text=lyrics_text.strip(),
+                                text_emotion_model=text_emotion_model,
+                                top_k_text=int(top_k_text_eval),
+                                embedding_model_name="sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
+                                embedding_device=None,
+                                verbose=False,
+                            )
+                        else:
+                            results = emotion_module.evaluate_emotion_similarity_with_image(
+                                image=image,
+                                lyrics_text=lyrics_text.strip(),
+                                top_k_image=top_k_image_eval,
+                                top_k_text=top_k_text_eval,
+                                image_model_type="25cat",
+                                text_emotion_model=text_emotion_model,
+                                embedding_model_name="sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
+                                embedding_device=None,
+                                verbose=False,
+                            )
 
                     st.session_state["image_lyrics_emotion_similarity"] = float(results["similarity"])
                     st.session_state["image_lyrics_emotion_results"] = results
