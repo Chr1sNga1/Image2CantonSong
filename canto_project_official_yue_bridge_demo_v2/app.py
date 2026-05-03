@@ -238,6 +238,64 @@ def strip_lyrics_section_tags(lyrics_text: str) -> str:
     return "\n".join(lines)
 
 
+def apply_huggingface_token_from_ui(hf_token: str = "") -> None:
+    """Apply Hugging Face token from Streamlit UI to environment variables."""
+    if hf_token and hf_token.strip():
+        os.environ["HF_TOKEN"] = hf_token.strip()
+        os.environ["HUGGINGFACE_API_TOKEN"] = hf_token.strip()
+
+
+def resolve_hf_llm_model_from_text_emotion_model(
+    text_emotion_model: str,
+    model_def: dict,
+) -> str:
+    """Resolve HF online LLM model id from the selected text emotion model."""
+
+    candidates = [
+        model_def.get("hf_model_id"),
+        model_def.get("model_id"),
+        model_def.get("model_name"),
+        model_def.get("huggingface_model"),
+        text_emotion_model,
+    ]
+
+    for item in candidates:
+        if not item:
+            continue
+
+        model_id = str(item).strip()
+        model_id = model_id.replace("(online)", "").strip()
+
+        # Remove provider suffix such as :novita.
+        # huggingface_hub expects a valid repo id here.
+        if ":" in model_id:
+            model_id = model_id.split(":", 1)[0].strip()
+
+        if "/" in model_id:
+            return model_id
+
+    # Fallback for the current dropdown default.
+    return "zai-org/GLM-5"
+
+
+def apply_huggingface_env_for_online_emotion(
+    hf_token: str,
+    text_emotion_model: str,
+    model_def: dict,
+) -> None:
+    """Apply UI-selected HF settings to environment variables."""
+
+    if hf_token and hf_token.strip():
+        os.environ["HF_TOKEN"] = hf_token.strip()
+        os.environ["HUGGINGFACE_API_TOKEN"] = hf_token.strip()
+
+    if model_def.get("is_online"):
+        os.environ["HUGGINGFACE_LLM_MODEL"] = resolve_hf_llm_model_from_text_emotion_model(
+            text_emotion_model,
+            model_def,
+        )
+
+
 def reset_evaluation_results() -> None:
     """Clear all evaluation results when a new lyrics prompt is generated."""
     keys_to_clear = [
@@ -607,8 +665,14 @@ if st.session_state["step_2_done"]:
             model_def = emotion_module.get_text_emotion_model_def(text_emotion_model)
             caption_text = ("")
             if model_def.get("is_online"):
-                caption_text += " Requires environment variable HUGGINGFACE_API_TOKEN."
-
+                resolved_hf_llm_model = resolve_hf_llm_model_from_text_emotion_model(
+                    text_emotion_model,
+                    model_def,
+                )
+                caption_text += (
+                    f" Uses HF Token from the sidebar. "
+                    f"HUGGINGFACE_LLM_MODEL will be set to {resolved_hf_llm_model} automatically."
+                )
             st.caption(caption_text)
             top_k_image_eval = st.number_input(
                 f"Top-k image emotions (up to {max_image_labels})",
@@ -631,6 +695,13 @@ if st.session_state["step_2_done"]:
                 st.session_state["image_lyrics_emotion_similarity_error"] = ""
                 st.session_state["image_lyrics_emotion_results"] = None
                 try:
+                    if model_def.get("is_online"):
+                        apply_huggingface_env_for_online_emotion(
+                            hf_token=hf_token,
+                            text_emotion_model=text_emotion_model,
+                            model_def=model_def,
+                        )            
+                                
                     if not st.session_state.get("uploaded_image_bytes"):
                         raise ValueError("Please upload an image first.")
                     image = Image.open(BytesIO(st.session_state["uploaded_image_bytes"])).convert("RGB")
