@@ -17,12 +17,12 @@ It does NOT compute genre_alignment.
 
 Example:
   python batch_eval_mm_models.py \
-    --input-dir /userhome/cs5/u3665806/Image2CantonSong/Images \
+    --input-dir /userhome/cs5/u3665806/Image2CantonSong/Images/flickr8k/Images \
     --output-dir outputs/batch_eval \
     --models qwen intern intern_rag \
-    --line-count 8
-    --max-images 10
-    --hf-token hf_xxx
+    --line-count 8 \
+    --max-images 10 \
+    --hf-token hf_xxx \
     --resume (Options to skip generation if JSON already exists)
 
 The script outputs:
