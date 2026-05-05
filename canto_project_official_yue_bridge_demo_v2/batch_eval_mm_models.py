@@ -21,10 +21,9 @@ Example:
     --output-dir outputs/batch_eval \
     --models qwen intern intern_rag \
     --line-count 8
-
-If using llm-online emotion model:
-  HF Token can be passed by:
+    --max-images 10
     --hf-token hf_xxx
+    --resume (Options to skip generation if JSON already exists)
 
 The script outputs:
   outputs/batch_eval/results_qwen.csv
@@ -638,6 +637,13 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip generation if the per-image JSON already exists.",
     )
+    
+    parser.add_argument(
+        "--max-images",
+        type=int,
+        default=0,
+        help="Maximum number of images to evaluate. 0 means no limit.",
+    )
 
     return parser.parse_args()
 
@@ -655,12 +661,17 @@ def main() -> None:
 
     apply_hf_env(args.hf_token, args.hf_llm_model)
 
-    images = list_images(args.input_dir)
+    all_images = list_images(args.input_dir)
 
-    if not images:
+    if not all_images:
         raise ValueError(f"No supported images found in: {args.input_dir}")
 
-    print(f"Input images: {len(images)}")
+    images = all_images
+    if args.max_images > 0:
+        images = images[:args.max_images]
+
+    print(f"Input images found: {len(all_images)}")
+    print(f"Images to evaluate: {len(images)}")
     print(f"Models: {args.models}")
     print(f"Output dir: {args.output_dir}")
 
