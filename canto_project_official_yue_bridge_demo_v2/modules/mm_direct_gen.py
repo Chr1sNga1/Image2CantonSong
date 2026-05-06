@@ -532,6 +532,11 @@ def generate_from_image(
         genre_prompt_mode=genre_prompt_mode,
         mood_text_override=mood_text_override,
     )
+    
+    # DEBUG 
+    # print("GENERATION PROMPT:", prompt[:5000])  # Print the first 5000 characters of the prompt for debugging
+    # print("PROMPT LENGTH:", len(prompt))
+    
     processor, model, device = _load_model(model_id, run_on_cpu)
 
     if _is_internvl(model_id):

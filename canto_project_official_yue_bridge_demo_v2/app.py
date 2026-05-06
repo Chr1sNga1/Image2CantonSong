@@ -386,7 +386,7 @@ with st.sidebar:
                 value=str(_DEFAULT_RAG_CSV),
                 help="Path to cantopop_corpus_final_583_yue.csv (defaults to repo root)",
             )
-            rag_top_k = st.slider("RAG top-k examples", min_value=1, max_value=6, value=3)
+            rag_top_k = st.slider("RAG top-k examples", min_value=1, max_value=5, value=1)
             st.caption("📚 RAG injects the most similar lyrics as few-shot context to improve [verse]/[chorus] structure and style.")
 
     # st.subheader("Style source")

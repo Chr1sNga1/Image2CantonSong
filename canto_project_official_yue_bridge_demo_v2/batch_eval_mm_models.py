@@ -15,11 +15,13 @@ For each generated lyric result, it computes four metrics:
 
 It does NOT compute genre_alignment.
 
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
 Example:
   python batch_eval_mm_models.py \
     --input-dir /userhome/cs5/u3665806/Image2CantonSong/Images/flickr8k/Images \
     --output-dir outputs/batch_eval \
-    --models qwen intern intern_rag \
+    --models intern_rag intern qwen \
     --line-count 8 \
     --max-images 10 \
     --hf-token hf_xxx \
@@ -40,12 +42,19 @@ import csv
 import importlib.util
 import json
 import os
+
+# Reduce CUDA memory fragmentation.
+# This should be set before torch or any model module is imported.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 import sys
 import time
 import traceback
+import gc
 from pathlib import Path
 from typing import Any
 
+import torch
 from PIL import Image
 
 
@@ -217,6 +226,30 @@ def apply_hf_env(hf_token: str = "", hf_llm_model: str = "") -> None:
             model_id = model_id.split(":", 1)[0].strip()
 
         os.environ["HUGGINGFACE_LLM_MODEL"] = model_id
+
+
+def cleanup_generation_model(model_key: str = "") -> None:
+    try:
+        unload_mm_models(clear_processor=True)
+    except TypeError:
+        try:
+            unload_mm_models()
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    gc.collect()
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        try:
+            torch.cuda.ipc_collect()
+        except Exception:
+            pass
+
+    if model_key:
+        print(f"  Cleared generation model/cache for: {model_key}")
 
 
 def resolve_text_emotion_model_key(emotion_module: object, requested: str) -> str:
@@ -635,7 +668,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--rag-top-k",
         type=int,
-        default=3,
+        default=1,
         help="Top-k RAG examples for InternVL + RAG.",
     )
 
@@ -767,7 +800,8 @@ def main() -> None:
                         rag_csv_path=args.rag_csv_path,
                         rag_top_k=int(args.rag_top_k),
                         genre_prompt_mode="preset",
-                        mood_text_override=args.mood_text,
+                        # mood_text_override=args.mood_text,
+                        mood_text_override="",
                     )
 
                     payload = bundle_to_dict(bundle)
@@ -795,18 +829,10 @@ def main() -> None:
 
                 print(f"  Generation failed: {exc}")
 
-                try:
-                    unload_mm_models()
-                except Exception:
-                    pass
-
                 continue
 
             finally:
-                try:
-                    unload_mm_models()
-                except Exception:
-                    pass
+                cleanup_generation_model(model_key)
 
             # -----------------------------
             # 2. Compute metrics
@@ -939,6 +965,8 @@ def main() -> None:
         model_csv = args.output_dir / f"results_{model_key}.csv"
         write_csv(model_csv, model_rows, MODEL_CSV_COLUMNS)
         print(f"Saved model CSV: {model_csv}")
+        
+        cleanup_generation_model(model_key)
 
     all_csv = args.output_dir / "results_all_models.csv"
     write_csv(all_csv, all_rows, ALL_CSV_COLUMNS)
