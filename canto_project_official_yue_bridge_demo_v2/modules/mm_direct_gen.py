@@ -250,6 +250,88 @@ def normalize_lyrics_format(lyrics_text: str) -> str:
 
     return lyrics_text.strip()
 
+
+def build_safe_rag_style_hint(raw_block: str, keep_reference_lines: int = 0) -> str:
+    """
+    Convert raw retrieved lyrics into low-weight style hints.
+
+    Goal:
+    - Do not let the model copy retrieved lyrics.
+    - Do not expose conflicting tags such as [Intro], [Verse], [Pre-Chorus].
+    - Keep RAG as style guidance only.
+    """
+
+    if not raw_block or not raw_block.strip():
+        return ""
+
+    text = raw_block.replace("\r\n", "\n").replace("\r", "\n")
+    text = text.replace("�", "")
+
+    # Remove markdown/code fences and retrieved-example headers.
+    text = text.replace("```json", "").replace("```", "")
+
+    raw_lines = [line.strip() for line in text.split("\n") if line.strip()]
+
+    cleaned_reference_lines = []
+
+    for line in raw_lines:
+        # Skip section tags from retrieved songs.
+        if re.fullmatch(r"\[[^\]]+\]", line):
+            continue
+
+        # Skip separators and headers.
+        if line.startswith("---"):
+            continue
+        if line.startswith("以下是"):
+            continue
+        if line.startswith("參考歌詞"):
+            continue
+
+        # Remove parenthesized ad-libs such as (Ha), (Yeah).
+        line = re.sub(r"\([^)]*\)", "", line).strip()
+
+        # Skip English-heavy lines.
+        cjk_count = len(re.findall(r"[\u4e00-\u9fff]", line))
+        ascii_alpha_count = len(re.findall(r"[A-Za-z]", line))
+        if cjk_count < 4:
+            continue
+        if ascii_alpha_count > cjk_count:
+            continue
+
+        # Avoid very long copied lines.
+        if len(line) > 28:
+            line = line[:28]
+
+        if line and line not in cleaned_reference_lines:
+            cleaned_reference_lines.append(line)
+
+        if len(cleaned_reference_lines) >= keep_reference_lines:
+            break
+
+    hint_lines = [
+        "【RAG 低權重風格參考】",
+        "以下內容只作風格參考，不是輸出格式示例。",
+        "不得複製、改寫或延續檢索歌詞中的原句。",
+        "不得使用檢索內容中的 [Intro]、[Verse]、[Pre-Chorus]、[Chorus]、[Bridge] 等標籤。",
+        "最終輸出必須以後方的 JSON schema 和 lyrics_text 標準格式為最高優先級。",
+        "",
+        "可參考的風格方向：",
+        "1. 使用自然香港粵語書面語，保持可演唱性。",
+        "2. verse 偏敘事與畫面描寫，chorus 偏情緒集中與 hook 感。",
+        "3. 可使用意象重複或近似押韻，但不要重複整段。",
+        "4. 歌詞應優先呼應當前圖片，而不是檢索歌詞。",
+    ]
+
+    if keep_reference_lines > 0 and cleaned_reference_lines:
+        hint_lines.extend([
+            "",
+            "少量參考片段如下，只能學習節奏，不得照抄：",
+        ])
+        hint_lines.extend(f"- {line}" for line in cleaned_reference_lines)
+
+    return "\n".join(hint_lines).strip()
+
+
 def generate_clip_e_mood(image: Image.Image) -> str:
     """Infer a top-2 mood label from the image using clip-e-ce.py."""
     image_bytes = BytesIO()
@@ -405,7 +487,20 @@ def generate_prompt(
         
     style_hint = user_style_hints.strip() or "無"
     style_prompt = style.strip()
-    rag_section = f"\n{rag_few_shot_block}\n" if rag_few_shot_block else ""
+    rag_section = ""
+    if rag_few_shot_block:
+        rag_section = f"""
+
+    【可選 RAG 風格參考】
+    {rag_few_shot_block}
+
+    【RAG 使用限制】
+    1. RAG 只提供低權重風格參考，不是輸出模板。
+    2. 不得複製、改寫或續寫 RAG 中的任何歌詞。
+    3. 不得使用 RAG 中出現的 section tag。
+    4. 若 RAG 與本任務格式要求衝突，必須以本任務格式要求為準。
+    5. 歌詞內容必須優先根據當前圖片生成，而不是根據檢索歌詞生成。
+    """.rstrip()
 
     structure_desc, format_block, lyrics_json_example = build_lyrics_format_instruction(line_count)
 
@@ -427,8 +522,7 @@ def generate_prompt(
             "female Cantonese melancholic pop piano airy vocal nostalgic"
         )
 
-    return f"""{rag_section}
-你是一位香港粵語流行歌作詞助手。請直接觀看這張圖片，輸出一個完整的 JSON 物件（不得截斷）。
+    return f"""你是一位香港粵語流行歌作詞助手。請直接觀看這張圖片，輸出一個完整的 JSON 物件（不得截斷）。
 
 【強制要求】
 1. 所有中文必須使用繁體字（Traditional Chinese），嚴禁使用任何簡體字。
@@ -444,6 +538,7 @@ def generate_prompt(
 11. JSON 必須包含四個字段：visual_anchor、title、lyrics_text、genre_prompt，缺一不可。
 12. genre_prompt 不得為空字串，不得省略，必須輸出英文 music tags。
 13. {genre_prompt_instruction}
+14. 如果提供 RAG 風格參考，RAG 只可作為低權重提示，不得覆蓋以上任何格式要求。str
 
 【lyrics_text 標準格式】
 lyrics_text 必須嚴格使用以下結構：
@@ -482,6 +577,8 @@ lyrics_text 必須嚴格使用以下結構：
 
 補充風格提示：{style_hint}
 圖片情緒：{mood_text}
+
+{rag_section}
 """.strip()
 
 
@@ -512,14 +609,26 @@ def generate_from_image(
     image = Image.open(BytesIO(image_bytes)).convert("RGB")
     image.thumbnail((1024, 1024))
 
-    # ── RAG: retrieve similar lyrics and inject as few-shot context ──────
+    # ── RAG: retrieve similar lyrics and inject as low-weight style hints ──────
     rag_few_shot_block = ""
+    raw_rag_few_shot_block = ""
+
     if use_rag and _is_internvl(model_id):
         try:
             from modules.rag_retriever import init as _rag_init, build_few_shot_block
             _rag_init(rag_csv_path or None)
+
             rag_query = (style.strip() or "cantopop ballad 粵語")
-            rag_few_shot_block = build_few_shot_block(rag_query, top_k=rag_top_k)
+            raw_rag_few_shot_block = build_few_shot_block(
+                rag_query,
+                top_k=rag_top_k,
+            )
+
+            rag_few_shot_block = build_safe_rag_style_hint(
+                raw_rag_few_shot_block,
+                keep_reference_lines=0,
+            )
+
         except Exception as _rag_err:
             warnings.warn(f"RAG retrieval failed, falling back to base prompt: {_rag_err}")
 
@@ -665,6 +774,13 @@ def generate_from_image(
             "raw_genre_prompt_from_model": raw_genre_prompt,
             "final_genre_prompt": final_genre_prompt,
             "payload_keys": list(payload.keys()),
+            
+            # RAG debug metadata
+            "rag_enabled": bool(use_rag and _is_internvl(model_id)),
+            "rag_top_k": int(rag_top_k),
+            "raw_rag_chars": len(raw_rag_few_shot_block),
+            "safe_rag_chars": len(rag_few_shot_block),
+            "safe_rag_few_shot_block": rag_few_shot_block,
 
             # Raw debug
             "raw_payload": payload,

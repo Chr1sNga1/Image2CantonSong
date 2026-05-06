@@ -668,7 +668,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--rag-top-k",
         type=int,
-        default=1,
+        default=3,
         help="Top-k RAG examples for InternVL + RAG.",
     )
 
