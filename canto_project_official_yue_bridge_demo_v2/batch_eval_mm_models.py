@@ -352,55 +352,74 @@ def compute_emotion_similarity(
     embedding_model_name: str,
     embedding_device: str | None,
 ) -> tuple[dict[str, Any] | None, str]:
-    try:
-        image = Image.open(image_path).convert("RGB")
+    max_retries = 3
+    base_sleep = 8
 
-        if hasattr(emotion_module, "evaluate_emotion_similarity_with_image"):
-            result = _call_with_supported_kwargs(
-                emotion_module.evaluate_emotion_similarity_with_image,
-                image=image,
-                image_path=str(image_path),
-                lyrics_text=lyrics_text,
-                text=lyrics_text,
-                top_k_image=top_k_image,
-                top_k_text=top_k_text,
-                image_model_type=image_model_type,
-                text_emotion_model=text_emotion_model,
-                embedding_model_name=embedding_model_name,
-                embedding_device=embedding_device,
-                verbose=False,
+    for attempt in range(1, max_retries + 1):
+        try:
+            image = Image.open(image_path).convert("RGB")
+
+            if hasattr(emotion_module, "evaluate_emotion_similarity_with_image"):
+                result = _call_with_supported_kwargs(
+                    emotion_module.evaluate_emotion_similarity_with_image,
+                    image=image,
+                    image_path=str(image_path),
+                    lyrics_text=lyrics_text,
+                    text=lyrics_text,
+                    top_k_image=top_k_image,
+                    top_k_text=top_k_text,
+                    image_model_type=image_model_type,
+                    text_emotion_model=text_emotion_model,
+                    embedding_model_name=embedding_model_name,
+                    embedding_device=embedding_device,
+                    verbose=False,
+                )
+                return result, ""
+
+            if hasattr(emotion_module, "evaluate_emotion_similarity"):
+                result = _call_with_supported_kwargs(
+                    emotion_module.evaluate_emotion_similarity,
+                    image=image,
+                    image_path=str(image_path),
+                    lyrics_text=lyrics_text,
+                    text=lyrics_text,
+                    top_k_image=top_k_image,
+                    top_k_text=top_k_text,
+                    image_model_type=image_model_type,
+                    text_emotion_model=text_emotion_model,
+                    embedding_model_name=embedding_model_name,
+                    embedding_device=embedding_device,
+                    verbose=False,
+                )
+                return result, ""
+
+            raise AttributeError("No supported emotion similarity evaluation function found.")
+
+        except Exception:
+            err = traceback.format_exc()
+
+            transient = any(
+                key in err
+                for key in [
+                    "504 Server Error",
+                    "Gateway Time-out",
+                    "503 Server Error",
+                    "502 Server Error",
+                    "429",
+                    "temporarily unavailable",
+                ]
             )
-            return result, ""
 
-        if hasattr(emotion_module, "evaluate_emotion_similarity"):
-            result = _call_with_supported_kwargs(
-                emotion_module.evaluate_emotion_similarity,
-                image=image,
-                image_path=str(image_path),
-                lyrics_text=lyrics_text,
-                text=lyrics_text,
-                top_k_image=top_k_image,
-                top_k_text=top_k_text,
-                image_model_type=image_model_type,
-                text_emotion_model=text_emotion_model,
-                embedding_model_name=embedding_model_name,
-                embedding_device=embedding_device,
-                verbose=False,
-            )
-            return result, ""
+            if transient and attempt < max_retries:
+                wait_s = base_sleep * attempt
+                print(
+                    f"[emotion retry] {image_path.name} "
+                    f"attempt {attempt}/{max_retries}, wait {wait_s}s"
+                )
+                time.sleep(wait_s)
+                continue
 
-        available = [
-            name for name in dir(emotion_module)
-            if "emotion" in name.lower() or "similarity" in name.lower()
-        ]
-        raise AttributeError(
-            "No supported emotion similarity evaluation function found. "
-            f"Available candidates: {available}"
-        )
-
-    except Exception:
-        return None, traceback.format_exc()
-    
+            return None, err    
 
 def compute_lyrics_format(
     lyrics_format_module: object,
