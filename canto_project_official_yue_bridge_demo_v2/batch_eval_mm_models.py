@@ -342,6 +342,14 @@ def append_error(row: dict[str, Any], key: str, exc: BaseException) -> None:
     row[key] = "".join(
         traceback.format_exception_only(type(exc), exc)
     ).strip()
+    
+    
+def format_duration(seconds: float) -> str:
+    """Format seconds as HH:MM:SS."""
+    seconds = int(round(seconds))
+    hours, rem = divmod(seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
 # ---------------------------------------------------------------------
@@ -701,6 +709,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    overall_t0 = time.perf_counter()
+    
     args = parse_args()
 
     if not args.input_dir.exists():
@@ -745,6 +755,8 @@ def main() -> None:
     all_rows: list[dict[str, Any]] = []
 
     for model_key in args.models:
+        model_t0 = time.perf_counter()
+        
         config = MODEL_CONFIGS[model_key]
         model_rows: list[dict[str, Any]] = []
 
@@ -966,11 +978,23 @@ def main() -> None:
         write_csv(model_csv, model_rows, MODEL_CSV_COLUMNS)
         print(f"Saved model CSV: {model_csv}")
         
+        model_elapsed = time.perf_counter() - model_t0
+        print(
+            f"Model {model_key} elapsed time: "
+            f"{format_duration(model_elapsed)} ({model_elapsed:.2f}s)"
+        )
+        
         cleanup_generation_model(model_key)
 
     all_csv = args.output_dir / "results_all_models.csv"
     write_csv(all_csv, all_rows, ALL_CSV_COLUMNS)
     print(f"\nSaved combined CSV: {all_csv}")
+    
+    overall_elapsed = time.perf_counter() - overall_t0
+    print(
+        f"Total elapsed time: "
+        f"{format_duration(overall_elapsed)} ({overall_elapsed:.2f}s)"
+    )
 
 
 if __name__ == "__main__":
