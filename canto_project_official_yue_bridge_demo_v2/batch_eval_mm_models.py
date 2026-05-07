@@ -36,6 +36,7 @@ The script outputs:
 
 from __future__ import annotations
 
+import math
 import inspect
 import argparse
 import csv
@@ -350,6 +351,69 @@ def format_duration(seconds: float) -> str:
     hours, rem = divmod(seconds, 3600)
     minutes, secs = divmod(rem, 60)
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+METRIC_KEYS = [
+    "clip_alignment",
+    "emotion_similarity",
+    "lyrics_format_score",
+    "quality_overall",
+]
+
+
+def is_empty_value(value: Any) -> bool:
+    """Return True if a value should be treated as empty/incomplete."""
+    if value is None:
+        return True
+
+    if isinstance(value, str):
+        return value.strip().lower() in {"", "nan", "none", "null"}
+
+    if isinstance(value, float):
+        return math.isnan(value)
+
+    return False
+
+
+def metrics_record_complete(record: dict[str, Any] | None) -> bool:
+    """A metrics record is complete only if all required metric fields are non-empty."""
+    if not record:
+        return False
+
+    for key in METRIC_KEYS:
+        if key not in record or is_empty_value(record.get(key)):
+            return False
+
+    return True
+
+
+def sanitize_for_json(obj: Any) -> Any:
+    """Convert NaN to None recursively so JSON dumping is safe."""
+    if isinstance(obj, dict):
+        return {k: sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [sanitize_for_json(v) for v in obj]
+    if isinstance(obj, float) and math.isnan(obj):
+        return None
+    return obj
+
+
+def load_json_if_exists(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def save_metrics_json(path: Path, row: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    clean_row = sanitize_for_json(row)
+    path.write_text(
+        json.dumps(clean_row, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 # ---------------------------------------------------------------------
@@ -761,8 +825,12 @@ def main() -> None:
         model_rows: list[dict[str, Any]] = []
 
         model_output_dir = args.output_dir / model_key
+
         json_output_dir = model_output_dir / "json"
         json_output_dir.mkdir(parents=True, exist_ok=True)
+
+        metrics_json_dir = model_output_dir / "metrics_json"
+        metrics_json_dir.mkdir(parents=True, exist_ok=True)
 
         print("\n" + "=" * 80)
         print(f"Testing model config: {model_key}")
@@ -782,9 +850,36 @@ def main() -> None:
                 "status": "started",
             }
 
-            image_bytes = image_path.read_bytes()
             output_json_path = json_output_dir / f"{image_path.stem}.json"
+            metrics_json_path = metrics_json_dir / f"{image_path.stem}.json"
+
             row["json_output_path"] = str(output_json_path)
+            row["metrics_json_path"] = str(metrics_json_path)
+
+            # Resume level 1:
+            # If complete metrics JSON exists, skip both generation and metrics.
+            if args.resume:
+                existing_metrics = load_json_if_exists(metrics_json_path)
+
+                if metrics_record_complete(existing_metrics):
+                    resumed_row = dict(existing_metrics)
+
+                    # Keep metadata safe even if old JSON missed some fields.
+                    resumed_row.setdefault("image_path", str(image_path))
+                    resumed_row.setdefault("image_name", image_path.name)
+                    resumed_row.setdefault("model_key", model_key)
+                    resumed_row.setdefault("model_id", config["model_id"])
+                    resumed_row.setdefault("use_rag", config["use_rag"])
+                    resumed_row.setdefault("json_output_path", str(output_json_path))
+                    resumed_row.setdefault("metrics_json_path", str(metrics_json_path))
+
+                    model_rows.append(resumed_row)
+                    all_rows.append(resumed_row)
+
+                    print("  Resumed from complete metrics JSON. Skipping generation and metrics.")
+                    continue
+
+            image_bytes = image_path.read_bytes()
 
             # -----------------------------
             # 1. Generate lyrics
@@ -836,6 +931,9 @@ def main() -> None:
             except Exception as exc:
                 row["status"] = "generation_failed"
                 row["generation_error"] = traceback.format_exc()
+
+                save_metrics_json(metrics_json_path, row)
+
                 model_rows.append(row)
                 all_rows.append(row)
 
@@ -962,6 +1060,8 @@ def main() -> None:
                 row["status"] = "metric_partial_error"
             else:
                 row["status"] = "ok"
+
+            save_metrics_json(metrics_json_path, row)
 
             model_rows.append(row)
             all_rows.append(row)
