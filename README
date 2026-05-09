@@ -1,3 +1,65 @@
-All environments envioronments are specified in /envs/
+# Image2CantonSong  
+# 圖像到粵語歌曲生成系統
 
-Demo is in /canto_project_official_yue_bridge_demo_v2/
+**Image2CantonSong** is an end-to-end multimodal song generation project that converts an input image into Cantonese lyrics and then generates a song through a lyrics-to-music pipeline.
+
+**Image2CantonSong** 是一個端到端的多模態歌曲生成系統，目標是將使用者輸入的圖片轉換為粵語歌詞，並進一步通過音樂生成模型產生歌曲。
+
+The project combines image understanding, Cantonese lyric generation, retrieval-augmented generation, prompt engineering, music generation, and multiple evaluation modules.
+
+本項目結合了圖像理解、粵語歌詞生成、檢索增強生成、Prompt Engineering、音樂生成，以及多個評估模組。
+
+---
+
+## Table of Contents  
+## 目錄
+
+- [Project Overview / 項目概述](#project-overview--項目概述)
+- [Main Workflow / 主要流程](#main-workflow--主要流程)
+- [Key Features / 主要功能](#key-features--主要功能)
+- [Repository Structure / 倉庫結構](#repository-structure--倉庫結構)
+- [Environment Setup / 環境配置](#environment-setup--環境配置)
+- [Running the Demo / 啟動 Demo](#running-the-demo--啟動-demo)
+- [Usage Guide / 使用方法](#usage-guide--使用方法)
+- [Lyrics Format / 歌詞格式要求](#lyrics-format--歌詞格式要求)
+- [Evaluation Modules / 評估模組](#evaluation-modules--評估模組)
+- [Technologies Used / 使用技術](#technologies-used--使用技術)
+- [Known Limitations / 已知限制](#known-limitations--已知限制)
+- [Future Improvements / 未來改進方向](#future-improvements--未來改進方向)
+- [Acknowledgement / 致謝](#acknowledgement--致謝)
+- [License and Usage / 授權與使用說明](#license-and-usage--授權與使用說明)
+
+---
+
+## Project Overview / 項目概述
+
+Image2CantonSong is designed as a research-oriented prototype for image-to-song generation. Given a user-uploaded image, the system extracts visual objects, scene information, mood, and emotional cues. These visual signals are then used to generate Cantonese lyrics and a corresponding genre prompt. After manual review and editing, the lyrics and prompt can be passed to the YuE-based music generation pipeline to produce a song.
+
+Image2CantonSong 是一個面向研究與課程展示的圖像到歌曲生成原型系統。使用者上傳圖片後，系統會提取圖片中的物體、場景、氛圍與情緒線索，並基於這些視覺資訊生成粵語歌詞與音樂風格 Prompt。使用者可以人工檢查與修改生成結果，最後將歌詞與 Prompt 傳入基於 YuE 的音樂生成流程，產生完整歌曲。
+
+The project focuses especially on Cantonese lyric generation. Compared with general Chinese lyric generation, Cantonese lyrics require more attention to Hong Kong-style expressions, natural Cantonese wording, lyric structure, and singability.
+
+本項目特別關注粵語歌詞生成。相比一般中文歌詞生成，粵語歌詞更需要考慮香港語境、粵語用詞自然度、歌詞結構，以及是否適合演唱。
+
+---
+
+## Main Workflow / 主要流程
+
+```text
+Image Upload
+    ↓
+Multimodal Image Understanding
+    ↓
+Visual Anchor, Mood and Scene Extraction
+    ↓
+Cantonese Lyrics Generation
+    ↓
+Genre Prompt Generation / Style Prompt Selection
+    ↓
+Manual Review and Editing
+    ↓
+Evaluation
+    ↓
+YuE-based Music Generation
+    ↓
+Generated Cantonese Song
