@@ -3,33 +3,26 @@
 
 """
 Visualize selected model result CSVs on one radar chart,
-including subjective evaluation.
+including manually provided subjective evaluation scores.
 
 Expected per-model CSV format:
 image_name,clip_alignment,emotion_similarity,lyrics_format_score,quality_overall
 
-Optional subjective score column inside each model CSV:
-subjective_eval
+Subjective scores are NOT read from CSV. They are provided by command arguments.
 
-Or provide a separate subjective CSV:
-model_key,image_name,subjective_eval
-
-Example 1: subjective_eval already exists in each results_xxx.csv
-
-python visualize_model_radar_subjective.py \
+Examples:
+python visualize_model_radar_subjective_manual.py \
   --input-dir outputs/batch_eval_50 \
   --models intern_rag intern \
-  --output outputs/batch_eval_50/model_radar_subjective.png \
-  --summary-output outputs/batch_eval_50/model_metric_summary_subjective.csv
+  --subjective-scores intern_rag=85 intern=72 \
+  --output outputs/batch_eval_50/model_radar_subjective_manual.png \
+  --summary-output outputs/batch_eval_50/model_metric_summary_subjective_manual.csv
 
-Example 2: subjective_eval stored in separate CSV
-
-python visualize_model_radar_subjective.py \
+python visualize_model_radar_subjective_manual.py \
   --input-dir outputs/batch_eval_50 \
-  --models intern_rag intern \
-  --subjective-input outputs/batch_eval_50/subjective_eval.csv \
-  --output outputs/batch_eval_50/model_radar_subjective.png \
-  --summary-output outputs/batch_eval_50/model_metric_summary_subjective.csv
+  --models intern_rag intern qwen \
+  --subjective-values 85 72 78 \
+  --output outputs/batch_eval_50/model_radar_subjective_all.png
 """
 
 from __future__ import annotations
@@ -50,13 +43,12 @@ BASE_METRIC_COLS = [
 ]
 
 SUBJECTIVE_COL = "subjective_eval"
-
 METRIC_COLS = BASE_METRIC_COLS + [SUBJECTIVE_COL]
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Plot selected model result CSVs on one radar chart with subjective evaluation."
+        description="Plot selected model result CSVs with manual subjective scores."
     )
 
     parser.add_argument(
@@ -74,10 +66,25 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        "--subjective-input",
-        type=Path,
+        "--subjective-scores",
+        nargs="*",
         default=None,
-        help="Optional CSV containing model_key,image_name,subjective_eval.",
+        help=(
+            "Manual subjective scores by model. "
+            "Format: model=score model=score. "
+            "Example: --subjective-scores intern_rag=85 intern=72 qwen=78"
+        ),
+    )
+
+    parser.add_argument(
+        "--subjective-values",
+        nargs="*",
+        type=float,
+        default=None,
+        help=(
+            "Alternative subjective scores in the same order as --models. "
+            "Example: --models intern_rag intern --subjective-values 85 72"
+        ),
     )
 
     parser.add_argument(
@@ -97,6 +104,71 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def parse_subjective_score_items(items: list[str] | None) -> dict[str, float]:
+    score_map: dict[str, float] = {}
+
+    if not items:
+        return score_map
+
+    for item in items:
+        item = str(item).strip()
+        if not item:
+            continue
+
+        if "=" in item:
+            key, value = item.split("=", 1)
+        elif ":" in item:
+            key, value = item.split(":", 1)
+        else:
+            raise ValueError(
+                f"Invalid subjective score item: {item}. "
+                "Use model=score, for example intern_rag=85."
+            )
+
+        key = key.strip()
+        value = value.strip().replace("%", "")
+
+        if not key:
+            raise ValueError(f"Invalid empty model key in item: {item}")
+
+        try:
+            score_map[key] = float(value)
+        except ValueError as exc:
+            raise ValueError(f"Invalid score value in item: {item}") from exc
+
+    return score_map
+
+
+def build_subjective_score_map(args: argparse.Namespace) -> dict[str, float]:
+    score_map = parse_subjective_score_items(args.subjective_scores)
+
+    if args.subjective_values is not None and len(args.subjective_values) > 0:
+        if score_map:
+            raise ValueError("Use either --subjective-scores or --subjective-values, not both.")
+
+        if len(args.subjective_values) != len(args.models):
+            raise ValueError(
+                "--subjective-values length must match --models length. "
+                f"Got {len(args.subjective_values)} values for {len(args.models)} models."
+            )
+
+        score_map = {
+            model_key: float(score)
+            for model_key, score in zip(args.models, args.subjective_values)
+        }
+
+    # Normalize 0-100 to 0-1 if needed.
+    if score_map:
+        max_score = max(score_map.values())
+        if max_score > 1.5:
+            score_map = {
+                model_key: score / 100.0
+                for model_key, score in score_map.items()
+            }
+
+    return score_map
+
+
 def load_model_csvs(input_dir: Path, models: list[str]) -> pd.DataFrame:
     all_dfs = []
 
@@ -111,84 +183,37 @@ def load_model_csvs(input_dir: Path, models: list[str]) -> pd.DataFrame:
         required_cols = {"image_name", *BASE_METRIC_COLS}
         missing = required_cols - set(df.columns)
         if missing:
-            raise ValueError(
-                f"{csv_path} missing required columns: {sorted(missing)}"
-            )
+            raise ValueError(f"{csv_path} missing required columns: {sorted(missing)}")
 
         df = df.copy()
         df["model_key"] = model_key
-
-        if SUBJECTIVE_COL not in df.columns:
-            df[SUBJECTIVE_COL] = np.nan
-
         all_dfs.append(df)
 
     return pd.concat(all_dfs, ignore_index=True)
 
 
-def merge_subjective_scores(
-    df: pd.DataFrame,
-    subjective_input: Path | None,
-) -> pd.DataFrame:
-    if subjective_input is None:
-        return df
-
-    if not subjective_input.exists():
-        raise FileNotFoundError(f"Subjective CSV not found: {subjective_input}")
-
-    sub_df = pd.read_csv(subjective_input)
-
-    required_cols = {"model_key", "image_name", SUBJECTIVE_COL}
-    missing = required_cols - set(sub_df.columns)
-    if missing:
-        raise ValueError(
-            f"{subjective_input} missing required columns: {sorted(missing)}"
-        )
-
-    sub_df = sub_df[["model_key", "image_name", SUBJECTIVE_COL]].copy()
-    sub_df[SUBJECTIVE_COL] = pd.to_numeric(
-        sub_df[SUBJECTIVE_COL],
-        errors="coerce",
-    )
-
-    df = df.drop(columns=[SUBJECTIVE_COL], errors="ignore")
-
-    df = df.merge(
-        sub_df,
-        on=["model_key", "image_name"],
-        how="left",
-    )
-
-    return df
-
-
-def normalize_metrics(df: pd.DataFrame) -> pd.DataFrame:
+def normalize_base_metrics(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
-    for col in METRIC_COLS:
+    for col in BASE_METRIC_COLS:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # Normalize lyrics_format_score from 0-100 to 0-1 if needed.
     if df["lyrics_format_score"].dropna().max() > 1.5:
         df["lyrics_format_score"] = df["lyrics_format_score"] / 100.0
-
-    # Normalize subjective_eval from 0-100 to 0-1 if needed.
-    if df[SUBJECTIVE_COL].dropna().max() > 1.5:
-        df[SUBJECTIVE_COL] = df[SUBJECTIVE_COL] / 100.0
 
     return df
 
 
 def aggregate_by_model(df: pd.DataFrame) -> pd.DataFrame:
     mean_summary = (
-        df.groupby("model_key", as_index=False)[METRIC_COLS]
+        df.groupby("model_key", as_index=False)[BASE_METRIC_COLS]
         .mean()
         .sort_values("model_key")
         .reset_index(drop=True)
     )
 
     valid_counts = (
-        df.groupby("model_key")[METRIC_COLS]
+        df.groupby("model_key")[BASE_METRIC_COLS]
         .count()
         .add_suffix("_valid_count")
         .reset_index()
@@ -205,6 +230,26 @@ def aggregate_by_model(df: pd.DataFrame) -> pd.DataFrame:
         .merge(valid_counts, on="model_key", how="left")
         .merge(total_counts, on="model_key", how="left")
     )
+
+    return summary
+
+
+def apply_subjective_scores(
+    summary: pd.DataFrame,
+    score_map: dict[str, float],
+    models: list[str],
+) -> pd.DataFrame:
+    summary = summary.copy()
+
+    unknown_models = sorted(set(score_map) - set(models))
+    if unknown_models:
+        raise ValueError(
+            "Subjective scores contain model keys not listed in --models: "
+            f"{unknown_models}"
+        )
+
+    summary[SUBJECTIVE_COL] = summary["model_key"].map(score_map)
+    summary[f"{SUBJECTIVE_COL}_valid_count"] = summary[SUBJECTIVE_COL].notna().astype(int)
 
     return summary
 
@@ -238,9 +283,6 @@ def plot_radar(summary: pd.DataFrame, output_path: Path) -> None:
 
     for _, row in summary.iterrows():
         values = [row[col] for col in METRIC_COLS]
-
-        # If one metric is missing for plotting, set it to 0.
-        # The summary CSV still keeps valid_count for transparency.
         values = [0 if pd.isna(v) else v for v in values]
         values += values[:1]
 
@@ -262,14 +304,28 @@ def main() -> None:
     if not args.input_dir.exists():
         raise FileNotFoundError(f"Input directory not found: {args.input_dir}")
 
+    subjective_score_map = build_subjective_score_map(args)
+
     df = load_model_csvs(args.input_dir, args.models)
-    df = merge_subjective_scores(df, args.subjective_input)
-    df = normalize_metrics(df)
+    df = normalize_base_metrics(df)
 
     summary = aggregate_by_model(df)
+    summary = apply_subjective_scores(
+        summary=summary,
+        score_map=subjective_score_map,
+        models=args.models,
+    )
 
     print("Aggregated mean scores by model:")
     print(summary)
+
+    print("\nManual subjective scores used:")
+    if subjective_score_map:
+        for model_key in args.models:
+            value = subjective_score_map.get(model_key, np.nan)
+            print(f"  {model_key}: {value if not pd.isna(value) else 'missing'}")
+    else:
+        print("  None. Subjective Eval will be plotted as 0.")
 
     print("\nValid metric counts:")
     count_cols = [
@@ -285,8 +341,19 @@ def main() -> None:
 
     if summary["subjective_eval_valid_count"].sum() == 0:
         print(
-            "\nWarning: No valid subjective_eval values found. "
+            "\nWarning: No manual subjective scores provided. "
             "The subjective dimension will be plotted as 0."
+        )
+
+    missing_subjective = summary.loc[
+        summary["subjective_eval"].isna(),
+        "model_key",
+    ].tolist()
+    if missing_subjective:
+        print(
+            "\nWarning: Missing subjective scores for models: "
+            + ", ".join(missing_subjective)
+            + ". They will be plotted as 0."
         )
 
     if args.summary_output is not None:
